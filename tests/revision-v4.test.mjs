@@ -1,0 +1,34 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {createHash} from 'node:crypto';
+import {Client} from '@modelcontextprotocol/client';
+import {StdioClientTransport} from '@modelcontextprotocol/client/stdio';
+import {ROUTER_ROOT} from '../src/paths.mjs';
+const projectRoot=fs.mkdtempSync(path.join(os.tmpdir(),'router-revision-'));
+const dir=path.join(projectRoot,'.codex/skills/revision-fixture');
+fs.mkdirSync(dir,{recursive:true});
+const file=path.join(dir,'SKILL.md');
+const manual=version=>`---\nname: revision-fixture\ndescription: Version verification fixture\n---\n${version}\n`;
+fs.writeFileSync(file,manual('A'));
+const client=new Client({name:'revision-test',version:'1.0.0'});
+try {
+  await client.connect(new StdioClientTransport({command:process.execPath,args:[path.join(ROUTER_ROOT,'src/mcp-server.mjs')],cwd:ROUTER_ROOT,stderr:'pipe'}));
+  const call=async(name,args)=>{const r=await client.callTool({name,arguments:args});assert(!r.isError,JSON.stringify(r));return r.structuredContent;};
+  const options={contractVersion:4,host:'codex',projectRoot};
+  const route=await call('route_task',{...options,query:'使用 $project-codex:revision-fixture',useFeedback:false,dryRun:true});
+  assert.equal(route.responseDetail,'compact');
+  const card=route.consultCandidates.find(c=>c.id==='project-codex:revision-fixture');assert(card);
+  const same=await call('get_skill',{...options,name:card.id,expectedContentHash:card.contentHash,purpose:'adapt'});
+  assert.equal(same.content,manual('A'));
+  fs.writeFileSync(file,manual('B'));
+  const mismatch=await call('get_skill',{...options,name:card.id,expectedContentHash:card.contentHash});
+  assert.equal(mismatch.found,false);assert.equal(mismatch.reason,'content-hash-mismatch');assert(!('content' in mismatch));
+  const changed=await call('get_skill',{...options,name:card.id});
+  assert.equal(changed.content,manual('B'));
+  assert.equal(changed.contentHash,createHash('sha256').update(Buffer.from(changed.content)).digest('hex'));
+  const full=await call('search_skills',{query:'使用 $project-codex:revision-fixture',routeId:route.routeId,host:'codex',projectRoot,responseDetail:'full',useFeedback:false});
+  assert.equal(full.routeId,route.routeId);assert(full.consultCandidates[0].path);
+  console.log('MCP version guard, compatible reads, compact/full and route reuse passed');
+} finally {await client.close();fs.rmSync(projectRoot,{recursive:true,force:true});}

@@ -1,0 +1,35 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+import {Client} from '@modelcontextprotocol/client';
+import {StdioClientTransport} from '@modelcontextprotocol/client/stdio';
+import {ROUTER_ROOT, LOG_ROOT, REGISTRY_PATH} from '../src/paths.mjs';
+import {restoreSnapshot} from '../src/restore-snapshot.mjs';
+const sha=p=>createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+const watched=()=>[REGISTRY_PATH,...(fs.existsSync(LOG_ROOT)?fs.readdirSync(LOG_ROOT).map(n=>path.join(LOG_ROOT,n)).filter(p=>fs.statSync(p).isFile()):[])].map(p=>[p,sha(p)]);
+const before=watched();
+const client=new Client({name:'v4-integration',version:'4.0.0'});
+const transport=new StdioClientTransport({command:process.execPath,args:[path.join(ROUTER_ROOT,'src/mcp-server.mjs')],cwd:ROUTER_ROOT,stderr:'pipe'});
+try {
+  await client.connect(transport);
+  const call=async(name,args)=>{const r=await client.callTool({name,arguments:args});assert(!r.isError,JSON.stringify(r));return r.structuredContent;};
+  const route=await call('route_task',{query:'升级技能路由器；将来可以连接浏览器和 Playwright，但本次只改路由器。',contractVersion:4,host:'codex',dryRun:true,useFeedback:false,runtimeCapabilities:{tools:[],availableAgentSlots:1}});
+  assert.equal(route.contractVersion,4);assert(route.routeId);assert(!route.selected);assert(!route.consultCandidates.some(s=>/playwright/i.test(s.id)));assert.equal(route.coordination.dispatchable,false);
+  assert(!JSON.stringify(route.coverage).includes('entries'));assert(JSON.stringify(route).length<100000);
+  const phase=await call('search_skills',{query:'审查路由器测试与评估覆盖',routeId:route.routeId,host:'codex'});assert.equal(phase.routeId,route.routeId);
+  const skill=await call('get_skill',{name:'dynamic-skill-router',contractVersion:4,host:'codex',purpose:'consult'});assert(skill.found);assert(skill.content.includes('V4'));assert(skill.contentHash);assert.equal(skill.purpose,'consult');
+  const bad=await call('report_outcome',{contractVersion:4,taskType:'test',decisions:[]});assert.equal(bad.recorded,false);
+  assert.deepEqual(watched(),before,'Read-only V4 requests changed registry/logs');
+} finally {await client.close();}
+const temp=fs.mkdtempSync(path.join(os.tmpdir(),'router-rollback-test-'));
+const target=path.join(temp,'target.txt'),backup=path.join(temp,'backup.txt'),fresh=path.join(temp,'fresh.txt');
+fs.writeFileSync(target,'new');fs.writeFileSync(backup,'old');fs.writeFileSync(fresh,'fresh');
+fs.writeFileSync(path.join(temp,'manifest.json'),JSON.stringify([{original:target,backup:'backup.txt',existed:true,sha256:sha(backup)}]));
+fs.writeFileSync(path.join(temp,'created-files.json'),JSON.stringify([fresh]));
+assert(restoreSnapshot(temp,{allowedRoots:[temp]}).dryRun);assert.equal(fs.readFileSync(target,'utf8'),'new');
+const restored=restoreSnapshot(temp,{apply:true,allowedRoots:[temp]});assert.equal(fs.readFileSync(target,'utf8'),'old');assert(!fs.existsSync(fresh));assert(fs.existsSync(restored.rescue));
+assert.throws(()=>restoreSnapshot(temp,{allowedRoots:[path.join(temp,'other')]}),/outside release scope/);
+fs.writeFileSync(backup,'tampered');assert.throws(()=>restoreSnapshot(temp,{allowedRoots:[temp]}),/checksum/);
+console.log(JSON.stringify({ok:true,mcpV4:true,readOnly:true,routeReuse:true,rollbackFixture:true}));

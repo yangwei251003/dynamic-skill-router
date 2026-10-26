@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import {ROUTER_ROOT} from '../src/paths.mjs';
+import {discoverSkills} from '../src/discovery-v4.mjs';
+import {routeTaskV4} from '../src/advisor-v4.mjs';
+const index=discoverSkills({host:'generic',runtimeSkills:[]});
+assert(index.errors.length===0,JSON.stringify(index.errors));
+const example=JSON.parse(fs.readFileSync(path.join(ROUTER_ROOT,'examples/runtime-tools.json'),'utf8'));
+const route=routeTaskV4('使用 example-code-review 审查代码',{host:'generic',contractVersion:4,dryRun:true,useFeedback:false,index,runtimeSkills:[],...example});
+assert(route.routeId);assert(route.consultCandidates.some(card=>card.id.includes('example-code-review')));
+console.log(JSON.stringify({ok:true,exampleSkillCount:index.skills.length,routeId:route.routeId,candidates:route.consultCandidates.map(card=>card.id),notice:'Sample metadata only; no external tool was executed.'},null,2));

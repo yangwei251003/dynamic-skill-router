@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 3,
+  "skills": [
+    {
+      "id": "example-code-review",
+      "nameZh": "代码审查示例",
+      "aliases": [
+        "example-code-review"
+      ],
+      "summaryZh": "Inspect a small code change and explain concrete correctness issues. This is a synthetic local sample, not an external code-review package.",
+      "category": "example",
+      "status": "active",
+      "role": "reference",
+      "risk": "low",
+      "triggers": [
+        "审查代码"
+      ],
+      "hostCompatibility": {},
+      "estimatedTokens": 100
+    },
+    {
+      "id": "example-static-site",
+      "nameZh": "静态网页示例",
+      "aliases": [
+        "example-static-site"
+      ],
+      "summaryZh": "Plan a minimal static website preview. This is an original demonstration manual; it does not deploy or send anything.",
+      "category": "example",
+      "status": "active",
+      "role": "reference",
+      "risk": "low",
+      "triggers": [
+        "静态网页"
+      ],
+      "hostCompatibility": {},
+      "estimatedTokens": 100
+    }
+  ],
+  "policy": {
+    "excludeRouterItself": true,
+    "maxPrimary": 1,
+    "maxSupport": 3,
+    "maxPotential": 3
+  }
+}

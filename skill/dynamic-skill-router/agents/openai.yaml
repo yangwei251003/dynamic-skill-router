@@ -1,0 +1,12 @@
+interface:
+  display_name: "动态技能路由器"
+  short_description: "按任务与阶段提供技能咨询，由宿主核查后应用"
+  brand_color: "#2563EB"
+  default_prompt: "Use $dynamic-skill-router for one initial V4 route, judge its cards against the task, and search within the same routeId only when a later stage calls for it."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "dynamic_skill_router"
+      description: "本地动态技能路由服务"
+policy:
+  allow_implicit_invocation: true

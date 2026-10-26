@@ -1,0 +1,29 @@
+{
+  "name": "yangwei-dynamic-skill-router",
+  "version": "4.2.0",
+  "private": true,
+  "type": "module",
+  "description": "面向多种 AI Agent 的本地动态技能路由器",
+  "bin": {
+    "skill-router": "./src/cli.mjs"
+  },
+  "scripts": {
+    "health": "node scripts/isolated-node.mjs src/cli.mjs health --contract-version 4 --host generic",
+    "list": "node scripts/isolated-node.mjs src/cli.mjs list --contract-version 4 --host generic",
+    "demo": "node scripts/isolated-node.mjs scripts/demo.mjs",
+    "test": "node scripts/isolated-node.mjs --test tests/discovery-v4.test.mjs tests/advisor-v4.test.mjs tests/capabilities-v4.test.mjs tests/capabilities-quality.test.mjs tests/capabilities-mcp.test.mjs tests/recovery-v4.test.mjs tests/recovery-mcp.test.mjs tests/research-hardening.test.mjs tests/revision-v4.test.mjs tests/v4-integration.test.mjs tests/host-v4.test.mjs tests/hook-resilience.test.mjs tests/plugin-mentions.test.mjs",
+    "mcp": "node src/mcp-server.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.0.0",
+    "smol-toml": "1.9.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT"
+}

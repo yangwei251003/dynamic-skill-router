@@ -1,0 +1,151 @@
+{
+  "schemaVersion": 1,
+  "hosts": {
+    "generic": {
+      "aliases": [],
+      "skillRoot": null,
+      "syncManaged": false,
+      "catalogManaged": false,
+      "parallelAgents": false,
+      "maxAgents": 1,
+      "models": {},
+      "capabilities": {
+        "skillDiscovery": {
+          "status": "unknown"
+        },
+        "hook": {
+          "status": "unknown"
+        },
+        "mcp": {
+          "status": "unknown"
+        },
+        "parallelAgents": {
+          "status": "unknown"
+        }
+      },
+      "notice": "Example profile; real capabilities must be provided by the current host."
+    },
+    "codex": {
+      "aliases": [],
+      "skillRoot": null,
+      "syncManaged": false,
+      "catalogManaged": false,
+      "parallelAgents": false,
+      "maxAgents": 1,
+      "models": {},
+      "capabilities": {
+        "skillDiscovery": {
+          "status": "unknown"
+        },
+        "hook": {
+          "status": "unknown"
+        },
+        "mcp": {
+          "status": "unknown"
+        },
+        "parallelAgents": {
+          "status": "unknown"
+        }
+      },
+      "notice": "Example profile; real capabilities must be provided by the current host."
+    },
+    "workbuddy": {
+      "aliases": [],
+      "skillRoot": null,
+      "syncManaged": false,
+      "catalogManaged": false,
+      "parallelAgents": false,
+      "maxAgents": 1,
+      "models": {},
+      "capabilities": {
+        "skillDiscovery": {
+          "status": "unknown"
+        },
+        "hook": {
+          "status": "unknown"
+        },
+        "mcp": {
+          "status": "unknown"
+        },
+        "parallelAgents": {
+          "status": "unknown"
+        }
+      },
+      "notice": "Example profile; real capabilities must be provided by the current host."
+    },
+    "antigravity": {
+      "aliases": [
+        "gemini"
+      ],
+      "skillRoot": null,
+      "syncManaged": false,
+      "catalogManaged": false,
+      "parallelAgents": false,
+      "maxAgents": 1,
+      "models": {},
+      "capabilities": {
+        "skillDiscovery": {
+          "status": "unknown"
+        },
+        "hook": {
+          "status": "unknown"
+        },
+        "mcp": {
+          "status": "unknown"
+        },
+        "parallelAgents": {
+          "status": "unknown"
+        }
+      },
+      "notice": "Example profile; real capabilities must be provided by the current host."
+    },
+    "claude": {
+      "aliases": [],
+      "skillRoot": null,
+      "syncManaged": false,
+      "catalogManaged": false,
+      "parallelAgents": false,
+      "maxAgents": 1,
+      "models": {},
+      "capabilities": {
+        "skillDiscovery": {
+          "status": "unknown"
+        },
+        "hook": {
+          "status": "unknown"
+        },
+        "mcp": {
+          "status": "unknown"
+        },
+        "parallelAgents": {
+          "status": "unknown"
+        }
+      },
+      "notice": "Example profile; real capabilities must be provided by the current host."
+    },
+    "cursor": {
+      "aliases": [],
+      "skillRoot": null,
+      "syncManaged": false,
+      "catalogManaged": false,
+      "parallelAgents": false,
+      "maxAgents": 1,
+      "models": {},
+      "capabilities": {
+        "skillDiscovery": {
+          "status": "unknown"
+        },
+        "hook": {
+          "status": "unknown"
+        },
+        "mcp": {
+          "status": "unknown"
+        },
+        "parallelAgents": {
+          "status": "unknown"
+        }
+      },
+      "notice": "Example profile; real capabilities must be provided by the current host."
+    }
+  }
+}

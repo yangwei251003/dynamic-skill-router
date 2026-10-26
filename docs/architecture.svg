@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="445" viewBox="0 0 1100 445">
+<rect width="1100" height="445" rx="20" fill="#102039"/>
+<text x="40" y="52" font-family="Segoe UI,Arial,sans-serif" font-size="28" fill="#f2f5fc">Dynamic Skill Router</text>
+<text x="40" y="86" font-family="Segoe UI,Arial,sans-serif" font-size="16" fill="#b5c5dd">Source-derived architecture diagram · not a running interface screenshot</text>
+<rect x="40" y="110" width="1020" height="60" rx="10" fill="#213650"/>
+<text x="60" y="136" font-family="Segoe UI,Arial,sans-serif" font-size="19" fill="#76d6cc">CLI / stdio MCP</text>
+<text x="60" y="159" font-family="Segoe UI,Arial,sans-serif" font-size="15" fill="#e4ebf7">src/cli.mjs + src/mcp-server.mjs</text>
+<rect x="40" y="190" width="1020" height="60" rx="10" fill="#213650"/>
+<text x="60" y="216" font-family="Segoe UI,Arial,sans-serif" font-size="19" fill="#76d6cc">Discovery + provenance</text>
+<text x="60" y="239" font-family="Segoe UI,Arial,sans-serif" font-size="15" fill="#e4ebf7">Skill sources, content hashes, coverage and runtime tool metadata</text>
+<rect x="40" y="270" width="1020" height="60" rx="10" fill="#213650"/>
+<text x="60" y="296" font-family="Segoe UI,Arial,sans-serif" font-size="19" fill="#76d6cc">V4 advisor + recovery</text>
+<text x="60" y="319" font-family="Segoe UI,Arial,sans-serif" font-size="15" fill="#e4ebf7">Scope-aware consultation cards, routeId reuse and bounded recovery plans</text>
+<rect x="40" y="350" width="1020" height="60" rx="10" fill="#213650"/>
+<text x="60" y="376" font-family="Segoe UI,Arial,sans-serif" font-size="19" fill="#76d6cc">Portable originals-only examples</text>
+<text x="60" y="399" font-family="Segoe UI,Arial,sans-serif" font-size="15" fill="#e4ebf7">Two original sample skills + the router manual; isolated HOME for demo/tests</text>
+</svg>

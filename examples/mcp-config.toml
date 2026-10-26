@@ -1,0 +1,8 @@
+# Synthetic example: replace CORE_PATH with your own absolute checkout path.
+# Merge only this block into the host's existing configuration; do not replace it.
+[mcp_servers.dynamic_skill_router]
+command = "node"
+args = ["CORE_PATH/src/mcp-server.mjs"]
+enabled = true
+startup_timeout_sec = 20
+tool_timeout_sec = 60

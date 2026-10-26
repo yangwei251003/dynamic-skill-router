@@ -1,0 +1,22 @@
+{
+  "runtimeTools": [
+    {
+      "name": "mcp__example__read_project",
+      "description": "Read project file metadata without changing files.",
+      "server": "example",
+      "available": true,
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    {
+      "name": "mcp__example__deploy_static_site",
+      "description": "Deploy a static website. This is example metadata, not a callable implementation.",
+      "server": "example",
+      "available": false,
+      "annotations": {
+        "destructiveHint": true
+      }
+    }
+  ]
+}
