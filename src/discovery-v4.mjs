@@ -118,7 +118,7 @@ function parseFrontmatter(text) {
 }
 
 function variables(projectRoot) {
-  return {HOME: os.homedir(), GLOBAL_ROOT, SKILLS_ROOT, ROUTER_ROOT, PROJECT_ROOT: projectRoot || ''};
+  return {HOME: (process.env.SKILL_ROUTER_HOME || os.homedir()), GLOBAL_ROOT, SKILLS_ROOT, ROUTER_ROOT, PROJECT_ROOT: projectRoot || ''};
 }
 
 function expandRoot(root, projectRoot) {
@@ -387,7 +387,7 @@ export function discoverSkills(options = {}) {
   // other hosts pulled in ~200 unusable skills and the deepest trees of the index build.
   const codexInventoryApplies = Boolean(options.pluginConfigPath) || host === 'codex';
   const pluginSkills = runtimeSkills === undefined && codexInventoryApplies && (sources === undefined || options.pluginConfigPath)
-    ? configuredPluginSkills(options.pluginConfigPath || path.join(os.homedir(), '.codex', 'config.toml'), options.pluginCacheRoot || path.join(os.homedir(), '.codex', 'plugins', 'cache'), coverage, errors, watchPaths)
+    ? configuredPluginSkills(options.pluginConfigPath || path.join((process.env.SKILL_ROUTER_HOME || os.homedir()), '.codex', 'config.toml'), options.pluginCacheRoot || path.join((process.env.SKILL_ROUTER_HOME || os.homedir()), '.codex', 'plugins', 'cache'), coverage, errors, watchPaths)
     : runtimeSkills;
   if (pluginSkills !== undefined && !Array.isArray(pluginSkills)) errors.push('runtimeSkills must be an array');
   if (Array.isArray(runtimeSkills)) coverage.pluginInventory = 'runtime';

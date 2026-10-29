@@ -9,6 +9,12 @@ try {
     taskContext: workerData.taskContext,
     runtimeSkills: workerData.runtimeSkills,
     runtimeCapabilities: workerData.runtimeCapabilities,
+    runtimeTools:workerData.runtimeTools,
+    runtimePlugins:workerData.runtimePlugins,
+    invocationContext:workerData.invocationContext,
+    recoveryContext:workerData.recoveryContext,
+    qualityProfile:workerData.qualityProfile,
+    currentModel:workerData.currentModel,
     projectRoot: workerData.projectRoot,
   });
   parentPort.postMessage({ok: true, context: formatAgentContextV4(result)});

@@ -1,5 +1,7 @@
 # 依赖与第三方许可
 
+方法资料来源：[数字生命卡兹克原作](https://www.douyin.com/note/7676403117654641926)、[SkillsBench](https://arxiv.org/abs/2602.12670v4)、[SWE-Skills-Bench](https://arxiv.org/abs/2603.15401v2)及文内官方研究链接。方法卡为自主概括；不捆绑图片、原模板全文或第三方Skill正文。原始作品与研究论文继续适用其原许可。
+
 依赖通过npm安装，不捆绑到本仓库。下列许可来自本次已安装锁定包的package.json；以依赖发行包内的完整LICENSE/NOTICE为准。
 
 | 包 | 本次版本 | 声明许可 |

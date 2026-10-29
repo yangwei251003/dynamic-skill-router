@@ -30,6 +30,14 @@ const taskContextSchema = z.object({
   domain: z.string().optional(), background: z.string().optional(), explicitSkills: z.array(z.string()).optional(),
   constraints: z.array(z.string()).optional(), nativeApproach: z.string().optional(),
   complexity: z.enum(['low', 'medium', 'high']).optional(), complexityEvidence: z.array(z.string()).optional(),
+  acceptanceCriteria: z.array(z.string()).optional(),
+  capabilityNeeds: z.array(z.string()).optional().describe('宿主解释的当前能力缺口，仅用于检索，不授权行动'),
+  evidence: z.array(z.object({source:z.enum(['user','project','runtime','reference','inference']),reference:z.string(),claim:z.string().optional()})).optional(),
+});
+const invocationContextSchema = z.object({
+  phase:z.enum(['auto','discovery','planning','design','implementation','validation','delivery']).optional(),
+  mode:z.enum(['plan','execute']).optional(),
+  readOnly:z.boolean().optional().describe('true只收紧范围；false不能解除用户或宿主已有只读限制'),
 });
 const runtimeSkillSchema = z.object({path: z.string(), id: z.string().optional(), provider: z.string().optional(), enabled: z.boolean().optional(), host: hostSchema.optional()});
 const discoveryFields = {host: hostSchema.optional().default('generic'), projectRoot: z.string().optional(), runtimeSkills: z.array(runtimeSkillSchema).optional()};
@@ -37,7 +45,7 @@ const runtimeToolSchema = z.object({name:z.string().min(1),description:z.string(
 const capabilityFields = {
   runtimeTools:z.array(runtimeToolSchema).max(3000).optional().describe('当前会话工具清单；提供真实名称、用途和可证实的插件来源。不能用配置推断可调用。'),
   runtimePlugins:z.array(z.object({id:z.string().min(1),name:z.string().optional(),description:z.string().max(4000).optional(),enabled:z.boolean().optional(),skills:z.array(z.string()).optional()})).max(500).optional(),
-  invocationContext:z.object({phase:z.enum(['auto','discovery','planning','design','implementation','validation','delivery']).optional()}).optional(),
+  invocationContext:invocationContextSchema.optional(),
   capabilityLimit:z.number().int().min(1).max(10).optional(),
 };
 const recoveryFields={
@@ -107,14 +115,14 @@ function createServer() {
     description:'复用 routeId，在阶段变化或能力缺口时挑选确实有帮助的插件/MCP/工具，返回调用时机、收益、范围检查及精确工具名。主 Agent 核对真实输入和既有授权后调用；路由器不代执行业务动作。',
     annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},
     inputSchema:z.object({query:z.string().min(1),routeId:z.string().min(1),...discoveryFields,...capabilityFields,...recoveryFields,runtimeCapabilities:runtimeCapabilitiesSchema.optional(),taskContext:taskContextSchema.optional(),phase:z.enum(['discovery','planning','design','implementation','validation','delivery']).optional()}),
-  }, async ({query,routeId,...options})=>{const task=taskAssessment(query,options.taskContext);return asResult({routeId,...adviseCapabilities(task,options),recoveryPlan:planRecovery({...task,rawText:query},options)});});
+  }, async ({query,routeId,...options})=>{const task=taskAssessment(query,options.taskContext,options.invocationContext);return asResult({routeId,...adviseCapabilities(task,options),recoveryPlan:planRecovery({...task,rawText:query},options)});});
 
   server.registerTool('plan_recovery',{
     title:'遇阻后检索资源与补足能力',
     description:'复用 routeId，低成本判断遇阻、低信心、用户否定效果后的行动顺序。返回必须查证的条件、公开检索词、真实可用搜索入口、工具安装条件和回到原任务的验收步骤。不联网、不安装、不执行外部动作；由主 Agent 主动落实。',
     annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},
-    inputSchema:z.object({query:z.string().min(1),routeId:z.string().min(1),...recoveryFields,runtimeTools:z.array(runtimeToolSchema).max(3000).optional(),runtimeCapabilities:runtimeCapabilitiesSchema.optional(),taskContext:taskContextSchema.optional()}),
-  },async ({query,routeId,...options})=>asResult({routeId,...planRecovery({...taskAssessment(query,options.taskContext),rawText:query},options)}));
+    inputSchema:z.object({query:z.string().min(1),routeId:z.string().min(1),...recoveryFields,invocationContext:invocationContextSchema.optional(),runtimeTools:z.array(runtimeToolSchema).max(3000).optional(),runtimeCapabilities:runtimeCapabilitiesSchema.optional(),taskContext:taskContextSchema.optional()}),
+  },async ({query,routeId,...options})=>asResult({routeId,...planRecovery({...taskAssessment(query,options.taskContext,options.invocationContext),rawText:query},options)}));
 
   server.registerTool('plan_agents', {
     title: '校验任务分工与 Agent 调度',
@@ -211,6 +219,9 @@ function createServer() {
       decisions: z.array(z.object({skillId: z.string().min(1), contentHash: z.string().min(1), mode: z.enum(['skip','consult','adapt','execute']), shown: z.boolean(), read: z.boolean(), adopted: z.boolean(), outcome: z.enum(['helpful','wrong','unnecessary','unknown']), evidence: z.array(z.object({kind: z.enum(['validation','user','self']), reference: z.string().min(1), passed: z.boolean().optional()}))})).optional(),
       routeId: z.string().optional(),
       registryRevision: z.string().optional(),
+      modelId:z.string().min(1).optional().describe('实际运行时模型标识，未知时省略，不凭模型自述猜测'),
+      observedAt:z.string().optional(),
+      revoked:z.boolean().optional().describe('撤销同任务、模型、技能版本与采用方式的校准证据，保留审计历史'),
       host: hostSchema.optional(),
       query: z.string().optional(),
       selectedIds: z.array(z.string()).optional(),
@@ -237,7 +248,7 @@ function createServer() {
       if (!checked.ok) return asResult({recorded: false, errors: checked.errors});
       fs.mkdirSync(LOG_ROOT, {recursive: true});
       fs.appendFileSync(path.join(LOG_ROOT, 'feedback-v4.jsonl'), `${JSON.stringify({...checked.entry, timestamp: new Date().toISOString()})}\n`, 'utf8');
-      return asResult({recorded: true, taskIdentityPresent: Boolean(feedback.routeId?.trim()), policy: '有 routeId 才参与校准；同一任务、技能版本、采用方式仅计一个样本，冲突报告不计分。仅对已采用且有验证或用户证据的同宿主、任务类型、内容版本和采用方式进行有界校准；不是模型训练。'});
+      return asResult({recorded: true, taskIdentityPresent: Boolean(feedback.routeId?.trim()), policy: '有 routeId 才参与校准；同一任务、模型、技能版本、采用方式仅计一个样本，冲突或撤销报告不计分。只采用可归因的验证或用户证据，保留unknown；已知模型按模型隔离，带日期证据90天过期。不是模型训练或自动改写全局规则。'});
     }
     if (typeof feedback.query !== 'string' || !feedback.selectedIds || !feedback.outcome) return asResult({recorded: false, errors: ['V3 requires query, selectedIds and outcome']});
     fs.mkdirSync(LOG_ROOT, {recursive: true});

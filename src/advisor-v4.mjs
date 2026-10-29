@@ -1,9 +1,11 @@
 import {randomUUID} from 'node:crypto';
 import {discoverSkills} from './discovery-v4.mjs';
 import {readFeedbackV4} from './feedback-v4.mjs';
-import {inferCapability, inferSkillStage} from './skill-staging.mjs';
+import {inferCapability, inferSkillStage, skillDomainCompatible, capabilityActionCompatible} from './skill-staging.mjs';
 import {adviseCapabilities} from './capabilities-v4.mjs';
 import {planRecovery, useFastPath} from './recovery-v4.mjs';
+import {taskText} from './task-input.mjs';
+import {adviseTaskMethods} from './task-methods-v4.mjs';
 
 const norm = (value) => String(value || '').normalize('NFKC').toLowerCase();
 const list = (value) => Array.isArray(value) ? value : [];
@@ -15,7 +17,7 @@ function token(value) {
   if (!normalized || STOP.has(normalized)) return '';
   return STEM.get(normalized) || normalized.replace(/(ies|ing|ed|s)$/i, (ending) => ending === 'ies' ? 'y' : '');
 }
-const words = (value) => {
+const legacyWords = (value) => {
   const text = norm(value);
   const latin = text.match(/[a-z][a-z0-9]{1,}/g) || [];
   const han = text.match(/[\p{Script=Han}]{2,}/gu) || [];
@@ -26,8 +28,24 @@ const words = (value) => {
   })].map(token).filter((item) => item.length >= 2 && !STOP.has(item));
 };
 
-function retrievalTerms(text, experimental = false) {
-  const terms = new Set(words(text));
+// Word boundaries provide evidence; arbitrary overlapping character fragments do not.
+const segmenter = new Intl.Segmenter('zh', {granularity: 'word'});
+const HAN_STOP = new Set('一个 这个 那个 这些 那些 我们 你们 自己 用户 任务 工作 使用 采用 可以 能够 需要 希望 帮助 进行 提供 相关 内容 方式 方法 以及 通过 根据 然后 最后 目前 现在 已经 还有 怎么 如何 什么 是否 很好 更好 高质量 优质 优秀 全局 动态 就是 直到 本身 其中 针对 完成 做好 要求 判断 重要 特别 确实 真实 具体 原来 一下 一些 所有 各种 更多 不同 进一步 同时 尽量'.split(' '));
+const wordCache = new Map();
+const words = (value) => {
+  const text = norm(value);
+  if (wordCache.has(text)) return wordCache.get(text);
+  const latin = (text.match(/[a-z][a-z0-9]{1,}/g) || []).map(token);
+  const han = [...segmenter.segment(text)].filter(part => part.isWordLike && /\p{Script=Han}/u.test(part.segment))
+    .map(part => part.segment).filter(part => part.length >= 2 && !HAN_STOP.has(part));
+  const result = unique([...latin, ...han].filter(item => item.length >= 2 && !STOP.has(item)));
+  if (wordCache.size > 6000) wordCache.clear();
+  wordCache.set(text, result);
+  return result;
+};
+
+function retrievalTerms(text, experimental = false, legacy = false) {
+  const terms = new Set((legacy ? legacyWords : words)(text));
   const bridges = [
     [/数据库/gu, ['database']],
     [/数据库(?:结构|模式)|表结构|字段|列名/gu, ['schema']],
@@ -35,6 +53,14 @@ function retrievalTerms(text, experimental = false) {
     [/回滚/gu, ['rollback']],
     [/并发/gu, ['concurrency']],
     [/事务/gu, ['transaction']],
+    [/网页|网站|前端/gu, ['frontend', 'website']],
+    [/幻灯片|演示文稿|课件|PPT/gi, ['presentation', 'slides']],
+    [/表格|电子表|Excel/gi, ['spreadsheet']],
+    [/论文|文献/gu, ['academic']],
+    [/电路|原理图|PCB/gi, ['circuit', 'schematic']],
+    [/技能路由|路由器/gu, ['router']],
+    [/视频|剪辑|动效/gu, ['video']],
+    [/提示词/gu, ['prompt']],
     [/故障排查|排查故障|调试|诊断/gu, ['debug']],
     [/rename.{0,60}(?:column|field)|(?:column|field).{0,60}rename|schema change|mixed.{0,50}deployment/i, ['schema', 'migration']],
     [/diagnostic|diagnos|troubleshoot|investigat|incident|outage|requests slow|connections increased/i, ['debug']],
@@ -44,34 +70,39 @@ function retrievalTerms(text, experimental = false) {
   const inferred = [];
   for (const [pattern, additions] of bridges) {
     const match = pattern.exec(text);
-    if (match && (experimental || !/\p{Script=Han}/u.test(match[0]))) for (const term of additions) { terms.add(term); inferred.push({term, evidence: match[0]}); }
+    if (match && (!legacy || experimental || !/\p{Script=Han}/u.test(match[0]))) for (const term of additions) { terms.add(term); inferred.push({term, evidence: match[0]}); }
   }
   return {terms, inferred};
 }
 
-function retrievalIndex(skills, activeText, experimental = false) {
-  const {terms, inferred} = retrievalTerms(activeText, experimental);
+function retrievalIndex(skills, activeText, experimental = false, legacy = false) {
+  const {terms, inferred} = retrievalTerms(activeText, experimental, legacy);
   const documents = skills.map((skill) => {
     const identity = [skill.id, skill.nameZh, skill.name, ...list(skill.aliases)].join(' ');
     const description = [skill.summaryZh, skill.description, ...list(skill.triggers)].join(' ');
-    return {identity: new Set(words(identity)), description: new Set(words(description))};
+    const tokenize = legacy ? legacyWords : words;
+    return {identity: new Set(tokenize(identity)), description: new Set(tokenize(description))};
   });
   const df = new Map();
   for (const doc of documents) for (const term of new Set([...doc.identity, ...doc.description])) df.set(term, (df.get(term) || 0) + 1);
-  return {terms, inferred, documents, df, corpusSize: skills.length, experimental};
+  return {terms, inferred, documents, df, corpusSize: skills.length, experimental, legacy};
 }
-const explicitName = (skill) => [skill.id, skill.nameZh, skill.name, ...list(skill.aliases)].filter(Boolean);
+const explicitName = (skill) => unique([skill.id, skill.nameZh, skill.name, ...list(skill.aliases)].filter(Boolean)
+  .flatMap(name => [name,String(name).replace(/[-_]/g,' ')]));
 
 function queryClauses(query) {
   const raw = String(query || '');
   // Host plugin mentions are explicit names; preserve their surrounding clause
   // so quoted, future and negative uses still go through the scope filters.
-  const mentions = raw.replace(/\[\$([\w.:-]+)\]\(app:\/\/[^\s)]+\)/g, ' $$$1 ');
+  const mentions = taskText(raw.replace(/\[\$([\w.:-]+)\]\(app:\/\/[^\s)]+\)/g, ' $$$1 '));
   // Only unquote an identifier directly governed by a use verb. Quoted examples
   // and arbitrary code remain excluded; later clause checks still reject negation.
   const namedQuotes = mentions.replace(/((?:使用|调用|启用|采用|用|\bapply|\buse|\binvoke)\s*)[“"「『`]([$\p{L}\p{N}_.:-]+)[”"」』`]/giu, '$1$2');
   const withoutCode = namedQuotes.replace(/```[\s\S]*?```/g, ' ').replace(/`([^`]+)`/g, (_, inner) => /^\$[\p{L}\p{N}_.:-]+$/u.test(inner.trim()) ? inner.trim() : ' ');
-  const withoutQuotes = withoutCode.replace(/[“"「『][^”"」』\n]*[”"」』]/g, ' ')
+  const sourceFiltered = withoutCode.replace(/(?:^|[。；;\n])\s*(?:参考资料|参考文档|网页上的|页面上的|文章中|文章里|文档中|文档里)[^。；;\n]*[“‘"][^。；;\n]*(?=[。；;\n]|$)/g,' ');
+  const withoutQuotes = sourceFiltered.replace(/[“"「『][^”"」』\n]*[”"」』]/g, ' ')
+    .replace(/‘[^’\n]*’|【[^】\n]*】/g, ' ')
+    .replace(/(^|[\s:：])'[^'\n]+'(?=\s|[.,，。;；]|$)/g, ' ')
     .replace(/^\s*>.*$/gm, ' ');
   const clauses = withoutQuotes.split(/[。！？!?;；，,\n]+/).map((value) => value.trim()).filter(Boolean);
   const isFuture = (value) => /以后|将来|未来|后续|下一步|届时|日后|计划(?:再|之后)|eventually|later|future|subsequently/i.test(value);
@@ -86,7 +117,8 @@ function queryClauses(query) {
     const beforeNegative = beforeFuture.split(/(?:不要|不得|禁止|别用|无需|不需要|避免|do not|don't|never|without)/i)[0];
     return beforeNegative.trim() && !isNegative(beforeNegative) ? [beforeNegative.trim()] : [];
   });
-  return {active, future: clauses.filter(isFuture), negative: clauses.filter(isNegative), raw};
+  const constraintText = clauses.map(value => value.split(/(?:例如|比如|举例|示例|for example|e\.g\.)/i)[0]).join('\n');
+  return {active, future: clauses.filter(isFuture), negative: clauses.filter(isNegative), raw, constraintText};
 }
 
 function lexicalScore(haystack, needle) {
@@ -117,12 +149,14 @@ function independentHits(hits, active) {
   return hits.filter(hit => !generic.has(hit.term) && (!/^[\p{Script=Han}]+$/u.test(hit.term) || accepted.has(hit.term)));
 }
 
-export function taskAssessment(query, taskContext = {}) {
+export function taskAssessment(query, taskContext = {}, invocationContext = {}) {
   const clauses = queryClauses(query);
   const activeText = clauses.active.join(' ');
-  const statedActions = list(taskContext.actions).filter((action) => lexicalScore(activeText, action));
-  const statedDeliverables = list(taskContext.deliverables).filter((item) => lexicalScore(activeText, item));
-  const development = /开发|实现|修复|重构|迁移|集成|升级|编写代码|build|implement|develop|fix|refactor|migrat/i.test(activeText);
+  const strings = values => unique(list(values).filter(value => typeof value === 'string' && value.trim()).map(value => value.trim()));
+  const statedActions = strings(taskContext.actions);
+  const statedDeliverables = strings(taskContext.deliverables);
+  const development = /开发|实现|修复|重构|迁移|集成|升级|编写代码|build|implement|develop|fix|refactor|migrat/i.test(activeText)
+    || /(?:做|制作|搭建|创建).{0,25}(?:网页|网站|应用|系统|游戏|软件|程序|插件)/i.test(activeText);
   const selfContainedFunction = /^\s*(?:export|implement|write)\s+(?:an?\s+)?(?:async\s+)?[a-z_$][\w$]*\s*\(/i.test(activeText)
     && !/repository|database|deployment|production|security audit|cross.module|existing system/i.test(activeText);
   const complexitySignals = [
@@ -132,24 +166,46 @@ export function taskAssessment(query, taskContext = {}) {
     /集成|接口|构建|既有|现有|integrat|existing/i.test(activeText) && 'existing-system-integration',
     /独立(?:子任务|交付物|工作线)|多个(?:模块|交付物)|parallel workstreams/i.test(activeText) && 'independent-deliverables',
   ].filter(Boolean);
-  for (const signal of list(taskContext.complexityEvidence)) if (lexicalScore(activeText, signal)) complexitySignals.push(signal);
-  const complexDevelopment = development && unique(complexitySignals).length >= 2;
-  const complexity = complexDevelopment ? 'complex' : development ? 'moderate' : 'simple';
+  const hostComplexity = ['low','medium','high'].includes(taskContext.complexity) ? taskContext.complexity : null;
+  const hostEvidence = strings(taskContext.complexityEvidence);
+  const complexDevelopment = development && (unique(complexitySignals).length >= 2 || hostComplexity === 'high');
+  const complexity = complexDevelopment || hostComplexity === 'high' ? 'complex'
+    : development || hostComplexity === 'medium' ? 'moderate' : 'simple';
   const taskType = /审查|review|audit|检查|核验/i.test(activeText) ? 'review'
     : development ? 'development'
       : /研究|调研|论文|文献|research/i.test(activeText) ? 'research'
         : /分析|统计|数据|analys/i.test(activeText) ? 'analysis' : 'general';
-  const readOnly = /只读|仅查看|不要修改|不得写入|read.only|review only/i.test(clauses.raw);
+  const readOnlyPattern = /只读|仅查看|不要修改|不得写入|\bread.only\b|\breview only\b/i;
+  const constraints = strings(taskContext.constraints);
+  const readOnlySources = [
+    readOnlyPattern.test(clauses.constraintText) && 'user-request',
+    constraints.some(value => readOnlyPattern.test(value)) && 'host-restriction',
+    invocationContext.mode === 'plan' && 'host-plan-mode',
+    invocationContext.readOnly === true && 'host-read-only',
+  ].filter(Boolean);
+  const readOnly = readOnlySources.length > 0;
   const explicitSkills = list(taskContext.explicitSkills).filter((name) => lexicalScore(activeText, name));
+  const objective = typeof taskContext.objective === 'string' && taskContext.objective.trim()
+    ? taskContext.objective.trim() : activeText.slice(0, 280);
+  const domain = typeof taskContext.domain === 'string' ? taskContext.domain.trim() || null : null;
+  const acceptanceCriteria = strings(taskContext.acceptanceCriteria);
+  const capabilityNeeds = strings(taskContext.capabilityNeeds);
+  const evidence = list(taskContext.evidence).filter(item => item && ['user','project','runtime','reference','inference'].includes(item.source)
+    && typeof item.reference === 'string').map(item => ({source:item.source,reference:item.reference,claim:typeof item.claim==='string'?item.claim:undefined}));
   return {
-    objective: taskContext.objective && lexicalScore(activeText, taskContext.objective) ? taskContext.objective : activeText.slice(0, 280),
+    objective,
     actions: statedActions,
     deliverables: statedDeliverables,
-    domain: taskContext.domain && lexicalScore(activeText, taskContext.domain) ? taskContext.domain : null,
+    domain,
     explicitSkills,
-    constraints: list(taskContext.constraints).filter((item) => lexicalScore(activeText, item)),
+    constraints,
     complexity, taskType, complexityEvidence: unique(complexitySignals), development, complexDevelopment, selfContainedFunction, readOnly,
-    activeText, activeClauses: clauses.active,
+    activeText, activeClauses: clauses.active, negativeRequests:clauses.negative,
+    originalRequest: clauses.raw,
+    acceptanceCriteria, capabilityNeeds, evidence,
+    retrievalText: unique([activeText, objective, domain, ...statedActions, ...statedDeliverables, ...capabilityNeeds]).join(' '),
+    interpretation: {source:'host-context',authority:'advisory-only',hostComplexity,complexityEvidence:hostEvidence},
+    restrictions: {readOnly, sources:readOnlySources, mode:invocationContext.mode || 'unspecified',canGrantPermission:false},
     excludedContext: {futureClauses: clauses.future.length, negativeClauses: clauses.negative.length},
   };
 }
@@ -180,10 +236,15 @@ function skillAvailability(skill, host, runtimeCapabilities) {
 
 function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibration, retrieval, document) {
   const active = assessment.activeText;
+  const retrievalText = assessment.retrievalText || active;
   const names = explicitName(skill);
   // A plugin mention identifies its currently supplied runtime skills, not an
   // unrelated legacy skill which happens to share the package's name.
   if (skill.sourceId?.startsWith('plugin:')) names.push(skill.sourceId.slice(7));
+  const denied = list(assessment.negativeRequests).some(clause =>
+    /不要(?:使用|调用|启用|采用|用)|不得(?:使用|调用|启用)|禁止(?:使用|调用|启用)|别用|不需要(?:使用|调用)|do not use|don't use|never use/i.test(clause)
+    && names.some(name => lexicalScore(clause,name)));
+  if (denied) return {skill,score:0,explicit:false,capability:inferCapability(skill),phase:inferSkillStage(skill),reasons:['explicit exclusion in user request'],availability:skillAvailability(skill,host,runtimeCapabilities),evidence:[]};
   const explicit = names.some((name) => {
     const escaped = String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const named = new RegExp(`(?:^|[\\s，,：:])\\$${escaped}(?=$|[\\s，,。.!！?？])`, 'i');
@@ -197,6 +258,34 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
   };
   const capability = inferCapability(skill);
   const phase = inferSkillStage(skill, capability);
+  const webCreation=/(?:做|制作|搭建|创建|设计|开发|实现|build|create|develop).{0,30}(?:网页|网站|前端|官网|web|website|frontend|landing page)/i.test(retrievalText);
+  const actionMatch=webCreation && ['visual-design','frontend-implementation'].includes(capability);
+  const compatibleDomain=actionMatch || skillDomainCompatible(skill,retrievalText);
+  const identityText=[skill.id,skill.name,skill.nameZh,...list(skill.aliases)].join(' ');
+  const manualSummary=[skill.summaryZh,skill.description].filter(Boolean).join(' ');
+  const exclusionStop=new Set(['standard','routine','basic','general','task','use','query']);
+  const exclusions=[...manualSummary.matchAll(/(?:do not use(?: this skill)? for|not suitable for|不适用于|不要用于)\s*([^.!。\n]+)/gi)]
+    .flatMap(match=>match[1].split(/,|、|\bor\b/i));
+  const explicitlyOutOfScope=exclusions.some(phrase=>{
+    const terms=words(phrase).filter(term=>!exclusionStop.has(term));
+    const matched=terms.filter(term=>retrieval.terms.has(term));
+    return terms.length>=2 && matched.length>=2 && matched.length/terms.length>=0.6;
+  });
+  const financeSpecialist=/(?:stock|equity)[-_ ]?(?:analysis|analyst|market|trading)|a-stock|股票|证券|backtest|yfinance/i.test(identityText);
+  const financeIntent=/股票|证券|股价|股市|基金|财报|估值|交易策略|回测|stock|equity|ticker|trading|backtest/i.test(retrievalText);
+  const scopeChecks=[
+    [/(?:^|:)qclaw-rules$/i, /qclaw/i],
+    [/network-config-validation/i, /路由设备|交换机|子网|网段|网络配置|cisco|\bvlan\b|\bsubnet\b|network.{0,20}config|switch.{0,20}config/i],
+    [/mle-workflow/i, /机器学习|模型训练|训练模型|训练集|machine.learning|\bML\b|training|prediction|inference pipeline/i],
+    [/batch-file-processor/i, /批量.{0,8}(?:文件|改名|重命名|转换|整理)|(?:batch|bulk|mass).{0,30}(?:file|rename|convert)|(?:files|文件).{0,20}(?:batch|bulk|批量)/i],
+    [/web-clone/i, /复刻|克隆|仿站|仿照|还原|参照.{0,12}(?:网页|网站)|clone|reproduce|replicat|recreat|copy.{0,12}(?:site|website)/i],
+  ];
+  const scopeMismatch=scopeChecks.some(([identity, intent])=>identity.test(skill.id) && !intent.test(retrievalText));
+  const videoSpecialist=/video|视频/i.test(identityText) && /video|视频/i.test(manualSummary);
+  const videoIntent=/视频|短片|成片|剪辑|片头|分镜|镜头|\bvideo\b|\bfilm\b|\bclip\b|\bshot\b/i.test(retrievalText);
+  if (!explicit && (!compatibleDomain || financeSpecialist && !financeIntent || scopeMismatch || explicitlyOutOfScope || videoSpecialist && !videoIntent)) return {
+    skill,score:0,explicit,capability,phase,reasons:['specialist scope does not match current task'],availability:skillAvailability(skill,host,runtimeCapabilities),evidence:[],
+  };
   const triggerHits = list(skill.triggers).filter((term) => lexicalScore(active, term));
   const description = [skill.summaryZh, skill.description, skill.nameZh, skill.name, skill.category].filter(Boolean).join(' ');
   const rawLexicalHits = [...retrieval.terms].filter((term) => document.identity.has(term) || document.description.has(term))
@@ -207,11 +296,11 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
     })
     .filter((hit) => hit.weight >= 1.4)
     .sort((a, b) => b.weight - a.weight);
-  const lexicalHits = retrieval.experimental ? independentHits(rawLexicalHits, active) : rawLexicalHits;
+  const lexicalHits = retrieval.legacy && !retrieval.experimental ? rawLexicalHits : independentHits(rawLexicalHits, retrievalText);
   const descriptionScore = lexicalHits.slice(0, 5).reduce((sum, hit) => sum + hit.weight, 0);
   const domain = assessment.domain;
   const domainMatch = domain && lexicalScore([description, ...list(skill.domains)].join(' '), domain);
-  let score = (explicit ? 30 : 0) + Math.min(3, triggerHits.length) * 6 + descriptionScore + (domainMatch ? 3 : 0);
+  let score = (explicit ? 30 : 0) + Math.min(3, triggerHits.length) * 6 + descriptionScore + (domainMatch ? 3 : 0) + (actionMatch ? 16 : 0);
   if (lexicalScore(active, skill.id)) score += 5;
   if (capability === 'skill-governance' && /技能|skill|路由器|router/i.test(active)) score += 8;
   const diagnosticIntent = /diagnostic|diagnos|troubleshoot|investigat|incident|outage/i.test(active)
@@ -224,13 +313,14 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
   if (diagnosticNameMatch) score += 12;
   if (capability === 'browser-automation' && !/浏览器|browser|playwright|网页操作|自动化测试/i.test(active)) score -= 10;
   const strongDescription = lexicalHits.length >= 2 && descriptionScore >= 7;
-  if (!explicit && !triggerHits.length && !strongDescription && !domainMatch && !diagnosticNameMatch) score = 0;
+  if (!explicit && !triggerHits.length && !strongDescription && !domainMatch && !diagnosticNameMatch && !actionMatch) score = 0;
   if (!explicit && !triggerHits.length && !domainMatch && score < 8) score = 0;
   if (score > 0) score += calibration?.adjustment || 0;
   const availability = skillAvailability(skill, host, runtimeCapabilities);
   if (!availability.discovered || !availability.readable || !availability.enabled || !availability.compatible) score = -100;
   const reasons = [];
   if (explicit) reasons.push('explicitly requested in active task');
+  if (actionMatch) reasons.push('creation action and web deliverable match this manual capability');
   if (triggerHits.length) reasons.push(`matched task signal: ${triggerHits[0]}`);
   if (lexicalHits.length) reasons.push(`distinctive manual terms: ${lexicalHits.slice(0, 3).map((hit) => `${hit.term}${hit.inferred ? ' (inferred)' : ''}`).join(', ')}`);
   if (diagnosticNameMatch) reasons.push('diagnostic request plus mitigation/check requirement matches a general debugging manual');
@@ -273,15 +363,20 @@ export function compactAdviceV4(result) {
   }), detailAccess: 'Use responseDetail:full for full catalog metadata; get_skill returns the complete manual. Compact summaries are not execution instructions.'};
 }
 
-function budgetFor(assessment, candidates) {
+function budgetFor(assessment, candidates, requestedProfile) {
   const simple = assessment.complexity === 'simple';
-  const cardLimit = simple ? 3 : 12;
-  const ordinaryReadLimit = simple ? 1 : 3;
+  const qualityProfile = ['economy','balanced','quality'].includes(requestedProfile) ? requestedProfile : 'balanced';
+  const profiles = {economy:[4,1,4000],balanced:[8,2,8000],quality:[12,3,12000]};
+  const [cards, reads, tokens] = profiles[qualityProfile];
+  const cardLimit = simple ? Math.min(3,cards) : cards;
+  const ordinaryReadLimit = simple ? 1 : reads;
   const explicitCount = candidates.filter((item) => item.explicit).length;
   return {
     consultCardLimit: cardLimit,
     fullReadLimit: ordinaryReadLimit,
-    softTokenLimit: 12_000,
+    softTokenLimit: simple ? Math.min(4000,tokens) : tokens,
+    qualityProfile,
+    verificationDepth: simple ? 'proportionate' : qualityProfile === 'quality' ? 'artifact-and-independent-evidence' : qualityProfile === 'balanced' ? 'artifact-and-targeted-checks' : 'required-acceptance-checks',
     explicitSkillException: explicitCount > ordinaryReadLimit,
     guidance: 'Read complete manuals only after scope and availability checks. Explicitly requested or necessary primary skills may exceed ordinary limits; do not trim safety constraints.',
   };
@@ -331,10 +426,10 @@ function compactCoverage(coverage = {}) {
 function advise(query, options = {}, filters = {}) {
   const routeId = options.routeId || randomUUID();
   const host = options.host || 'codex';
-  const assessment = taskAssessment(query, options.taskContext || {});
+  const assessment = taskAssessment(query, options.taskContext || {}, options.invocationContext || {});
   const recovery = planRecovery({...assessment,rawText:query},options);
   if (!filters.followup && useFastPath(assessment,options,recovery)) return {
-    contractVersion:4,routeId,registryRevision:null,task:assessment,consultCandidates:[],capabilityCandidates:[],
+    contractVersion:4,routeId,registryRevision:null,task:assessment,consultCandidates:[],capabilityCandidates:[],methodCandidates:[],
     recoveryPlan:recovery,performance:{mode:'fast',scannedSkills:false,scannedCapabilities:false,reason:'Native capability is sufficient; no blocker or explicit discovery request.'},
     coverage:{summary:{discovered:null},errors:[],discoveredSkills:null,skippedReason:'native-fast-path'},
     capabilityCoverage:{skippedReason:'native-fast-path'},
@@ -348,10 +443,10 @@ function advise(query, options = {}, filters = {}) {
   const skills = list(index.skills);
   const contentHashes = Object.fromEntries(skills.filter((skill) => skill.contentHash).map((skill) => [skill.id, skill.contentHash]));
   const feedback = options.useFeedback === true
-    ? readFeedbackV4({host, taskType: assessment.taskType, contentHashes}, options.feedbackPolicy || {}, options.feedbackPath)
+    ? readFeedbackV4({host, taskType: assessment.taskType, modelId:options.currentModel, contentHashes}, options.feedbackPolicy || {}, options.feedbackPath)
     : new Map();
-  // New ranking remains opt-in until representative recall/precision gates pass.
-  const retrieval = retrievalIndex(skills, assessment.activeText, options.retrievalProfile === 'experimental');
+  // Legacy is retained for ablation; production promotion is gated by paired evaluation.
+  const retrieval = retrievalIndex(skills, assessment.retrievalText, options.retrievalProfile === 'experimental', options.retrievalProfile === 'legacy');
   let ranked = skills.map((skill, index) => scoreCandidate(skill, assessment, host, options.runtimeCapabilities, feedback.get(skill.id)?.byMode?.consult, retrieval, retrieval.documents[index]))
     .filter((item) => item.score > 0);
   const explicitProviders = new Set(ranked.filter(item => item.explicit && item.skill.sourceId?.startsWith('plugin:')).map(item => item.skill.sourceId.slice(7)));
@@ -360,11 +455,20 @@ function advise(query, options = {}, filters = {}) {
   if (filters.domain) ranked = ranked.filter((item) => lexicalScore([item.capability, item.skill.category, item.skill.summaryZh, ...list(item.skill.domains)].join(' '), filters.domain));
   if (filters.phase) ranked = ranked.filter((item) => item.phase === filters.phase);
   ranked.sort((a, b) => b.score - a.score || a.skill.id.localeCompare(b.skill.id));
-  if (assessment.complexity === 'simple' && ranked.length) {
-    const floor = Math.max(8, ranked[0].score * 0.82);
+  // Byte-identical manuals add no evidence. Preserve explicit requests while
+  // avoiding another reading slot for a redundant, unrequested installation.
+  const seenManuals=new Set();
+  ranked=ranked.filter(item=>{
+    const key=item.skill.contentHash;
+    if (!key) return true;
+    if (seenManuals.has(key) && !item.explicit) return false;
+    seenManuals.add(key);return true;
+  });
+  if (ranked.length) {
+    const floor = Math.max(8, ranked[0].score * (assessment.complexity === 'simple' ? 0.82 : 0.68));
     ranked = ranked.filter((item) => item.score >= floor || item.explicit || item.reasons.some((reason) => reason.startsWith('matched task signal:')));
   }
-  const budget = budgetFor(assessment, ranked);
+  const budget = budgetFor(assessment, ranked, options.qualityProfile);
   const limit = Number.isInteger(filters.limit) && filters.limit > 0 ? Math.min(filters.limit, 12) : budget.consultCardLimit;
   const explicitCandidates = ranked.filter(item => item.explicit);
   const selectedCards = [...explicitCandidates, ...ranked.filter(item => !item.explicit).slice(0, Math.max(0, limit - explicitCandidates.length))];
@@ -383,10 +487,16 @@ function advise(query, options = {}, filters = {}) {
     recoveryPlan:recovery,
     performance:{mode:'full',scannedSkills:true,scannedCapabilities:true},
     capabilityCandidates:capabilities.candidates,
+    capabilityNeedCoverage:capabilities.needCoverage,
     capabilityCoverage:{revision:capabilities.revision,...capabilities.coverage,errors:capabilities.errors},
     invocationPolicy:{phase:capabilities.phase,...capabilities.executionPolicy},
     task: assessment,
+    methodCandidates:adviseTaskMethods(assessment,options),
     consultCandidates,
+    feedbackPlan: {tool:'report_outcome',routeId,host,taskType:assessment.taskType,modelId:options.currentModel || null,
+      timing:'After the deliverable is checked; report only actually observed decisions.',
+      evidenceRequired:true,selfAssessmentCalibrates:false,unknownIsAllowed:true,
+      guidance:'Preserve skill contentHash and mode, cite a real validation result or user feedback, and use unknown when benefit cannot be attributed. Do not report all shown skills as adopted.'},
     decisionBrief: {
       nativeBaseline,
       recommendation: consultCandidates.length || capabilities.candidates.length ? 'Compare skill and tool candidates with the native approach; verify benefit, timing, inputs and existing authorization before adoption or host invocation.' : 'Proceed with native capabilities unless new task evidence establishes a capability need.',
@@ -409,7 +519,7 @@ export function searchSkills(query, options = {}) {
   const result = advise(query, options, {source: options.source, domain: options.domain, phase: options.phase, limit: options.limit,followup:true});
   return options.responseDetail === 'compact' ? compactAdviceV4(result) : result;
 }
-export function formatAgentContextV4(result) {
+function formatBaseAgentContextV4(result) {
   const candidates = list(result?.consultCandidates).map((item) => `${item.id} (${item.phase}; ${item.suggestedMode}): ${item.reasons.join('; ') || item.summaryZh}`).join('\n');
   const tools = list(result?.capabilityCandidates).map(item=>`${item.name} (${item.kind}; ${item.decision}; ${item.phase}): ${item.reason}; ${item.when}`).join('\n');
   return `[动态技能路由器] routeId=${result?.routeId || 'unknown'} contractVersion=4\n` +
@@ -420,4 +530,14 @@ export function formatAgentContextV4(result) {
     `Choose skip, consult, adapt, or execute after scope and availability checks. Read complete manuals before applying them. ` +
     `No execution or external write is authorized by this advice.\n` +
     `Coordination: ${result?.coordination?.reason || 'Assess independent work and verified slots.'}`;
+}
+
+export function formatAgentContextV4(result) {
+  const parts=[formatBaseAgentContextV4(result)];
+  if (result?.task?.restrictions?.readOnly) parts.push('Host/user restriction: read-only; advice cannot authorize writes.');
+  if (list(result?.methodCandidates).length) {
+    parts.push('Optional task methods (skip unless useful):');
+    for (const item of result.methodCandidates) parts.push([item.name,item.reason,'Validation: '+item.validation,'Stop: '+item.stop].join(' — '));
+  }
+  return parts.join('\n');
 }

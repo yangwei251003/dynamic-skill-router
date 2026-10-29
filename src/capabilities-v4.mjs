@@ -32,7 +32,7 @@ function serverCard(name, value, plugin = null) {
 
 /** Read-only inventory. Never starts MCP processes, connects to endpoints, or writes a cache. */
 export function discoverCapabilities(options = {}) {
-  const home = options.homeDir || os.homedir();
+  const home = options.homeDir || (process.env.SKILL_ROUTER_HOME || os.homedir());
   const entries = new Map(), errors = [];
   const codex = (options.host || 'codex') === 'codex';
   let config = {};
@@ -102,13 +102,20 @@ export function discoverCapabilities(options = {}) {
     const plugin = pluginFor(item.plugin);
     const serverEntry = server ? entries.get(`mcp:${server}`) : null;
     const shortName = item.name.split('__').at(-1);
-    const enabled = item.available !== false && serverEntry?.enabled !== false && plugin?.enabled !== false
+    const configurationPermits = serverEntry?.enabled !== false && plugin?.enabled !== false
       && (!serverEntry?.enabledTools || serverEntry.enabledTools.includes(shortName) || serverEntry.enabledTools.includes(item.name))
       && !serverEntry?.disabledTools?.some(x=>x===shortName || x===item.name);
+    // A host's explicit, current availability observation may outlive an older
+    // config snapshot. Keep both facts; this does not enable a service or prove auth.
+    const configurationEnabled = serverEntry?.configured || plugin?.configured ? configurationPermits : null;
+    const runtimeAvailable = typeof item.available === 'boolean' ? item.available : null;
+    const enabled = runtimeAvailable === true || (runtimeAvailable !== false && configurationPermits);
+    const configurationConflict = runtimeAvailable === true && configurationEnabled === false;
     const annotations = {};
     for (const key of ['readOnlyHint','destructiveHint','idempotentHint','openWorldHint']) if (typeof item.annotations?.[key] === 'boolean') annotations[key]=item.annotations[key];
     const entry = {id:`tool:${item.name}`,kind:'tool',name:item.name,server,plugin:plugin?.plugin || item.plugin || null,
-      description:text(item.description),configured:false,enabled,callable:enabled,evidence:'runtime-tool',annotations};
+      description:text(item.description,4000),configured:false,enabled,callable:enabled,evidence:'runtime-tool',annotations,
+      runtimeAvailable,configurationEnabled,configurationConflict};
     entries.set(entry.id,entry);
     if (plugin) { plugin.tools.push(entry.name); plugin.callable ||= enabled; }
     if (server) {
@@ -135,7 +142,9 @@ function terms(value) {
     [/数据库|postgres|sql|database/,['database']], [/原理图|电路|pcb|easyeda|schematic/,['circuit']],
     [/浏览器|browser|playwright/,['browser']], [/网页|网站|前端|frontend|website/,['frontend']],
     [/设计稿|figma|design file/,['figma']], [/设计稿|设计|design/,['design']], [/代码库|仓库|repository|github/,['repository']],
-    [/文档|documentation|docs/,['documentation']], [/文档|document|file/,['document']], [/搜索|检索|查找|search/,['search']],
+    [/文档|documentation|docs/,['documentation']], [/文档|document|file/,['document']], [/搜索|检索|查找|调研|search/,['search']],
+    [/调研|研究|文献|research/,['research']], [/官方资料|官方文档|official documentation/,['official','documentation']],
+    [/来源|原始资料|sources?/,['source']], [/联网|全网|互联网|internet|\bweb\b/,['web']],
     [/测试|test|验证|verify|validation/,['test']], [/部署|上线|发布|deploy|publish/,['deploy']],
     [/幻灯片|演示文稿|slides|presentation/,['slides']], [/表格|spreadsheet|excel/,['spreadsheet']],
     [/邮件|email|mail/,['email']], [/日历|calendar/,['calendar']], [/图像|图片|image/,['image']],
@@ -155,6 +164,23 @@ function operation(entry) {
   if (/\b(search|find|fetch|get|list|read|browse|lookup|resolve|open|status|windows)\b/.test(name) || entry.annotations?.readOnlyHint===true) return {action:'read',phase:'discovery',effect:entry.annotations?.readOnlyHint===true?'read':'unknown'};
   return {action:'unknown',phase:'implementation',effect:'unknown'};
 }
+
+function toolPurpose(description) {
+  const prose=String(description || '').split(/^\s*exec tool declaration\s*:/im)[0]
+    .replace(/```[\s\S]*?```/g,'');
+  const paragraphs=prose.split(/\r?\n\s*\r?\n/).map(value=>value.trim()).filter(Boolean);
+  const serverAt=paragraphs.findIndex(value=>/^MCP server instructions\s*:/i.test(value));
+  // Host metadata often wraps the actual tool description in an app title and
+  // shared server rules. Those rules concern every tool, not this operation.
+  if (serverAt>=0) return (paragraphs[serverAt+1] || paragraphs.slice(0,serverAt).join(' ')).slice(0,700);
+  const [first='',second='']=paragraphs;
+  const shortHeading=first.length<=80 && !/[.!?。！？:：]/.test(first);
+  const specificOperation=/^(?:search(?:es)?|find(?:s)?|get(?:s)?|read(?:s)?|fetch(?:es)?|retrieve(?:s)?|list(?:s)?|create(?:s)?|update(?:s)?|delete(?:s)?|render(?:s)?|inspect(?:s)?|validate(?:s)?|return(?:s)?|run(?:s)?|execute(?:s)?|capture(?:s)?|搜索|检索|读取|获取|列出|创建|更新|删除|渲染|检查|返回)\b/i;
+  // Also accept metadata whose shared rules were stripped by the host. Never
+  // switch to paragraphs starting with cross-tool directions such as "Use ...".
+  return (shortHeading && specificOperation.test(second) ? second : first).slice(0,700);
+}
+
 function currentPhase(active, given) {
   if (given && given!=='auto') return given;
   if (/测试|验证|排查|调试|检查|test|validat|debug|verify|inspect|check/i.test(active)) return 'validation';
@@ -164,6 +190,45 @@ function currentPhase(active, given) {
   return 'discovery';
 }
 const OUTCOME = {discovery:'获取当前任务缺失的具体资料或项目状态',planning:'取得制定方案所需的具体依据',design:'获得实现所需的设计资料',implementation:'生成或修改当前任务要求的产物',validation:'取得可验证的运行结果或缺陷证据',delivery:'完成用户当前明确要求的交付动作'};
+
+const decisionOrder = {'use-now':0,'check-scope':0,'discover-first':1,'defer':2,'skip':3};
+const candidateOrder = (a,b) => decisionOrder[a.decision]-decisionOrder[b.decision] || b.score-a.score || a.id.localeCompare(b.id);
+
+// Coverage is about finding evidence for a need, not authorizing its execution.
+// Reserve room for distinct needs before filling remaining slots by relevance.
+function selectCandidates(cards, needs, limit) {
+  const sorted = [...cards].sort(candidateOrder);
+  if (needs.length < 2) return sorted.slice(0,limit);
+  const selected = [], selectedIds = new Set(), covered = new Set();
+  const add = card => {
+    selected.push(card); selectedIds.add(card.id);
+    if (decisionOrder[card.decision]<2) for (const match of card.needMatches) covered.add(match.index);
+  };
+  for (const card of sorted.filter(card => card.explicit)) {
+    if (selected.length === limit) break;
+    add(card);
+  }
+  for (let index=0;index<needs.length && selected.length<limit;index++) {
+    if (covered.has(index)) continue;
+    const choices=sorted.filter(card => !selectedIds.has(card.id) && decisionOrder[card.decision]<2 && card.needMatches.some(match=>match.index===index));
+    choices.sort((a,b) => decisionOrder[a.decision]-decisionOrder[b.decision]
+      || b.needMatches.find(match=>match.index===index).strength-a.needMatches.find(match=>match.index===index).strength
+      || candidateOrder(a,b));
+    if (choices[0]) add(choices[0]);
+  }
+  while (selected.length<limit) {
+    const remaining=sorted.filter(card=>!selectedIds.has(card.id));
+    if (!remaining.length) break;
+    const family=card=>`${card.plugin || card.server || card.name.split('__').slice(0,-1).join('__')}\u0000${card.phase}`;
+    const repeats=card=>selected.filter(other=>family(other)===family(card)).length;
+    // A small redundancy penalty never outranks a scope/phase restriction.
+    remaining.sort((a,b)=>decisionOrder[a.decision]-decisionOrder[b.decision]
+      || (b.score-4*repeats(b))-(a.score-4*repeats(a)) || candidateOrder(a,b));
+    add(remaining[0]);
+  }
+  return selected.sort(candidateOrder);
+}
+
 function requestedDelivery(assessment, entry) {
   const name=norm(entry.name);
   const pattern=/send|reply|message/.test(name)?/发送|回复|\bsend\b|\breply\b/i
@@ -179,23 +244,39 @@ function requestedDelivery(assessment, entry) {
 export function adviseCapabilities(assessment, options = {}) {
   const inventory = options.capabilityIndex || discoverCapabilities(options);
   const active = assessment.activeText || '';
+  const needs = unique(list(assessment.capabilityNeeds).filter(value=>typeof value==='string').map(value=>value.trim()));
+  const retrieval = [active, typeof assessment.retrievalText==='string' ? assessment.retrievalText : '', ...needs].join(' ');
+  const needTerms = needs.map(need=>new Set(terms(need)));
   const phase = currentPhase(active, options.phase || options.invocationContext?.phase);
-  const queryTerms = new Set(terms(active));
+  const readOnly = assessment.readOnly === true || options.invocationContext?.readOnly === true || options.invocationContext?.mode === 'plan';
+  const queryTerms = new Set(terms(retrieval));
   const normalizedActive=label(active);
   const providerKey=value=>label(String(value||'').split('@')[0]);
   const namedProviders=new Set(inventory.capabilities.filter(e=>e.kind==='plugin'||e.kind==='mcp').flatMap(e=>[e.name,e.displayName,e.plugin]).filter(x=>x&&providerKey(x).length>2&&(`-${normalizedActive}-`).includes(`-${providerKey(x)}-`)).map(providerKey));
-  const wantsSearch=/搜索|检索|查找|\bsearch\b|\bfind\b/i.test(active);
-  const wantsRead=wantsSearch||/读取|查看|检查|获取|\bread\b|\bget\b|\binspect\b/i.test(active);
+  const wantsSearch=/搜索|检索|查找|调研|\bsearch\b|\bfind\b|\bresearch\b/i.test(retrieval);
+  const wantsRead=wantsSearch||/读取|查看|检查|获取|\bread\b|\bget\b|\binspect\b/i.test(retrieval);
   const cards = [];
   for (const entry of inventory.capabilities) {
     if (!entry.enabled) continue;
     if (entry.kind==='mcp' && entry.tools.length) continue; // Tools provide the actionable granularity.
     if(entry.kind==='tool'&&namedProviders.size&&!namedProviders.has(providerKey(entry.plugin))&&!namedProviders.has(providerKey(entry.server))&&![...namedProviders].some(p=>(`-${label(entry.name)}-`).includes(`-${p}-`)))continue;
     // Purpose text carries more signal than cross-tool instructions and examples.
-    const purpose=entry.description.split(/\n\s*\n/)[0].slice(0,700);
-    if(/^Capture\b/i.test(purpose)&&!/捕获|截图|导入|capture|screenshot|import/i.test(active))continue;
+    const purpose=toolPurpose(entry.description);
+    // A shared action such as search/export/status does not establish the
+    // requested object. Personal communication and workspace APIs need a
+    // matching domain or an explicit capability need supplied by the host.
+    const identityText=norm(`${entry.name} ${entry.plugin || ''} ${entry.server || ''}`);
+    if (/gmail|email|mailbox/.test(identityText) && !/邮件|邮箱|电子信|gmail|e-?mail|mailbox/i.test(retrieval)) continue;
+    if (/google.calendar/.test(identityText) && !/日历|日程|会议|calendar|schedule|meeting/i.test(retrieval)) continue;
+    if (/chatgpt.space/.test(identityText) && !/chatgpt\s*space|空间|知识库|协作文档|\bspace\b/i.test(retrieval)) continue;
+    if(/^Capture\b/i.test(purpose)&&!/捕获|截图|导入|capture|screenshot|import/i.test(retrieval))continue;
     const haystack = `${entry.name} ${purpose}`;
-    const shared = terms(haystack).filter(x=>queryTerms.has(x));
+    const entryTerms = terms(haystack);
+    const shared = entryTerms.filter(x=>queryTerms.has(x));
+    const needMatches = needTerms.flatMap((need,index)=> {
+      const matched=entryTerms.filter(term=>need.has(term));
+      return matched.length>=2 ? [{index,strength:matched.length/Math.max(1,need.size),matchedTerms:matched}] : [];
+    });
     const identity = unique((entry.kind==='tool'?[entry.name]:[entry.name,entry.plugin,entry.displayName]).filter(Boolean));
     const explicit = identity.some(x=> {
       const escaped=String(x).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
@@ -209,7 +290,7 @@ export function adviseCapabilities(assessment, options = {}) {
     // Reject tool purposes explicitly excluding the requested domain.
     const exclusions=[...entry.description.matchAll(/(?:Do not use (?:this tool )?for|not (?:intended|suitable) for)\s+([^.!\n]+)/gi)].map(x=>x[1]);
     if(!explicit&&exclusions.some(x=>terms(x).some(t=>queryTerms.has(t)&&!brandTerms.has(t))))continue;
-    if (/dynamic.skill.router/.test(norm(`${entry.name} ${entry.server}`)) && !/路由|router/i.test(active)) continue;
+    if (/dynamic.skill.router/.test(norm(`${entry.name} ${entry.server}`)) && !/路由|router/i.test(retrieval)) continue;
     const op = entry.kind==='tool' ? operation(entry) : {action:'discover',phase,effect:'unknown'};
     let score = shared.length*4+(explicit?24:0);
     const nameTerms=terms(entry.name.split('__').at(-1));
@@ -225,25 +306,33 @@ export function adviseCapabilities(assessment, options = {}) {
     let decision = entry.callable && entry.kind==='tool' ? 'use-now' : 'discover-first';
     const gates = ['confirm-task-benefit','inspect-exact-schema-and-inputs','respect-current-user-authorization'];
     if(/must load|read .{0,160}SKILL\.md|skill.*before|before.*skill/i.test(entry.description))gates.push('read-required-skill-before-invocation');
-    if (assessment.readOnly && op.effect!=='read') { decision='skip'; gates.push('read-only-scope'); }
+    if (readOnly && !['read','unknown'].includes(op.effect)) { decision='skip'; gates.push('read-only-scope'); }
+    else if (readOnly && op.effect==='unknown' && entry.kind==='tool') { decision='defer'; gates.push('verify-read-only-effect-before-invocation'); }
     else if (needsDelivery && !deliveryRequested) {decision='defer';gates.push('delivery-not-requested');score-=12;}
     else if (entry.kind==='tool' && op.phase!=='discovery' && op.phase!==phase) {decision='defer';gates.push('different-task-phase');score-=8;}
     else if (entry.kind==='tool' && op.effect!=='read') {decision='check-scope';gates.push('verify-effects-and-authorized-scope');}
     if (!entry.callable) {decision=decision==='skip'?'skip':'discover-first';gates.push('runtime-callability-unverified');}
     if (entry.kind==='plugin') {decision='discover-first';gates.push('select-specific-tool-or-read-relevant-skill');}
+    if (entry.configurationConflict) {
+      gates.push('runtime-config-conflict-do-not-change-configuration');
+      if (decision==='use-now') decision='check-scope';
+    }
     if (op.effect==='high-impact' || op.effect==='external-write') gates.push('check-destination-and-current-action-authorization');
     cards.push({id:entry.id,kind:entry.kind,name:entry.name,plugin:entry.plugin || null,server:entry.server || null,
-      description:entry.description.slice(0,240),score,explicit,matchedTerms:shared.slice(0,6),
-      availability:{discovered:true,enabled:entry.enabled,callable:entry.callable,evidence:entry.evidence},
-      decision,phase:op.phase,when:decision==='defer'?'仅到相应阶段且用户目标需要时再评估':decision==='discover-first'?'先按需发现工具或读取相关技能，确认当前会话可用':`当前 ${phase} 阶段，且缺少其能提供的结果时`,
+      description:purpose.slice(0,240),score,explicit,matchedTerms:shared.slice(0,6),needMatches,
+      availability:{discovered:true,enabled:entry.enabled,callable:entry.callable,evidence:entry.evidence,
+        ...(entry.runtimeAvailable!==undefined?{runtimeAvailable:entry.runtimeAvailable,configurationEnabled:entry.configurationEnabled,configurationConflict:entry.configurationConflict}:{})},
+      decision,phase:op.phase,when:readOnly && op.effect==='unknown' && entry.kind==='tool'?'先核对准确 schema 与输入，确认无写入效果后再评估调用；确认前暂缓':decision==='defer'?'仅到相应阶段且用户目标需要时再评估':decision==='discover-first'?'先按需发现工具或读取相关技能，确认当前会话可用':`当前 ${phase} 阶段，且缺少其能提供的结果时`,
       expectedBenefit:OUTCOME[op.phase] || OUTCOME[phase],effect:op.effect,gates,
       invocation:{tool:entry.kind==='tool'?entry.name:null,argumentPolicy:'Use the host tool schema and actual task inputs; do not invent parameters.',executor:'host-agent',automaticallyExecuted:false},
       reason:explicit?'用户在当前任务中点名此能力':`任务与能力共有具体信号：${shared.slice(0,4).join('、')}`});
   }
-  const order = {'use-now':0,'check-scope':0,'discover-first':1,'defer':2,'skip':3};
-  cards.sort((a,b)=>order[a.decision]-order[b.decision] || b.score-a.score || a.id.localeCompare(b.id));
-  const candidates = cards.slice(0,Math.min(10, Math.max(1,options.capabilityLimit || 5)));
+  const candidates = selectCandidates(cards,needs,Math.min(10, Math.max(1,options.capabilityLimit || 5)));
+  const covered = new Set(candidates.filter(card=>decisionOrder[card.decision]<2).flatMap(card=>card.needMatches.map(match=>match.index)));
+  const needCoverage = {requested:needs,covered:needs.filter((_,index)=>covered.has(index)),uncovered:needs.filter((_,index)=>!covered.has(index)),
+    verification:'Retrieval coverage only; tool execution and output quality remain unverified.'};
   return {revision:inventory.revision,coverage:inventory.coverage,errors:inventory.errors,phase,candidates,
+    needCoverage,
     executionPolicy:{executor:'host-agent',advisoryOnly:true,scanExecutesTools:false,
       recheckAt:['initial-task','phase-change','capability-gap','tool-unavailable'],
       skipWhen:['native-tools-sufficient','no-specific-task-benefit','already-have-required-evidence'],

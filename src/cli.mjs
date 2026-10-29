@@ -42,12 +42,12 @@ try {
     if(parsed.jsonInput){const envelope=JSON.parse(fs.readFileSync(0,'utf8'));query=envelope.query||query;options={...envelope.options,...options};}
     if(command==='recover'){
       query||=fs.readFileSync(0,'utf8').trim();if(!options.routeId)throw new Error('recover requires --route-id');
-      output({routeId:options.routeId,...planRecovery({...taskAssessment(query,options.taskContext),rawText:query},options)});
+      output({routeId:options.routeId,...planRecovery({...taskAssessment(query,options.taskContext,options.invocationContext),rawText:query},options)});
     }else if(command==='capabilities'){
       output(discoverCapabilities(options));
     }else if(command==='search-capabilities'){
       query||=fs.readFileSync(0,'utf8').trim();if(!options.routeId)throw new Error('search-capabilities requires --route-id');
-      output({routeId:options.routeId,...adviseCapabilities(taskAssessment(query,options.taskContext),options),recoveryPlan:planRecovery({...taskAssessment(query,options.taskContext),rawText:query},options)});
+      output({routeId:options.routeId,...adviseCapabilities(taskAssessment(query,options.taskContext,options.invocationContext),options),recoveryPlan:planRecovery({...taskAssessment(query,options.taskContext,options.invocationContext),rawText:query},options)});
     }else if(command==='route'||command==='plan'){
       query||=fs.readFileSync(0,'utf8').trim(); const v4=options.contractVersion===4;
       const result=v4?routeTaskV4(query,options):routeTask(query,options);

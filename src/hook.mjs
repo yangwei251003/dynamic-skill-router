@@ -157,6 +157,9 @@ function routeWithinBudget(prompt, input) {
         workerData: {
           prompt, host: routerHost, taskContext: input.taskContext,
           runtimeSkills: input.runtimeSkills, runtimeCapabilities: input.runtimeCapabilities,
+          runtimeTools:input.runtimeTools,runtimePlugins:input.runtimePlugins,
+          invocationContext:input.invocationContext,recoveryContext:input.recoveryContext,
+          qualityProfile:input.qualityProfile,currentModel:input.currentModel,
           projectRoot: input.projectRoot,
         },
       });
@@ -174,6 +177,7 @@ function routeWithinBudget(prompt, input) {
 // Routing stays read-only; the derived index is rebuilt out of band so the next prompt
 // takes the cached path. Throttled, detached, and never awaited.
 function refreshIndexInBackground(input) {
+  if (process.env.SKILL_ROUTER_DISABLE_BACKGROUND_REFRESH === '1' || input.invocationContext?.mode === 'plan' || input.invocationContext?.readOnly === true) return;
   try {
     const now = Date.now();
     let last = 0;

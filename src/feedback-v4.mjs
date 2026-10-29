@@ -12,6 +12,9 @@ export function validateOutcomeV4(value) {
   if (value.contractVersion !== 4) errors.push('contractVersion must be 4');
   if (typeof value.taskType !== 'string' || !value.taskType.trim()) errors.push('taskType is required');
   if (typeof value.host !== 'string' || !value.host.trim()) errors.push('host is required');
+  if (value.modelId !== undefined && (typeof value.modelId !== 'string' || !value.modelId.trim())) errors.push('modelId must be a non-empty runtime identifier');
+  if (value.observedAt !== undefined && !Number.isFinite(Date.parse(value.observedAt))) errors.push('observedAt must be an ISO date');
+  if (value.revoked !== undefined && typeof value.revoked !== 'boolean') errors.push('revoked must be boolean');
   if (!Array.isArray(value.decisions)) errors.push('decisions must be an array');
   const decisions = Array.isArray(value.decisions) ? value.decisions : [];
   for (const [i, decision] of decisions.entries()) {
@@ -45,6 +48,14 @@ function hashFor(context, id) {
 
 export function computeFeedbackCalibrationV4(entries, context = {}, policy = {}) {
   const stats = new Map();
+  const now = Number.isFinite(policy.nowMs) ? policy.nowMs : Date.now();
+  const maxAgeMs = (policy.maxAgeDays ?? 90) * 86400000;
+  const identity = (entry, decision) => JSON.stringify([entry.host,entry.taskType,entry.routeId,entry.modelId || null,decision.skillId,decision.mode,decision.contentHash]);
+  const revoked = new Set();
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    if (entry?.revoked === true && validateOutcomeV4(entry).ok)
+      for (const decision of entry.decisions) revoked.add(identity(entry,decision));
+  }
   // Retries and repeated reports from one task are not independent observations.
   // Records without task identity remain readable audit history, not calibration.
   const observations = new Map();
@@ -55,7 +66,12 @@ export function computeFeedbackCalibrationV4(entries, context = {}, policy = {})
     if (typeof entry.routeId !== 'string' || !entry.routeId.trim()) continue;
     if (context.host && entry.host !== context.host) continue;
     if (context.taskType && entry.taskType !== context.taskType) continue;
+    if (context.modelId && entry.modelId !== context.modelId) continue;
+    if (entry.revoked === true) continue;
+    const observed = Date.parse(entry.observedAt || entry.timestamp || '');
+    if (Number.isFinite(observed) && (observed > now + 300000 || now - observed > maxAgeMs)) continue;
     for (const decision of entry.decisions) {
+      if (revoked.has(identity(entry,decision))) continue;
       if (!decision.shown || !decision.read || !decision.adopted || decision.mode === 'skip') continue;
       if (!['helpful', 'wrong', 'unnecessary'].includes(decision.outcome)) continue;
       const expectedHash = hashFor(context, decision.skillId);
@@ -65,7 +81,7 @@ export function computeFeedbackCalibrationV4(entries, context = {}, policy = {})
         && item.reference.trim() && (decision.outcome !== 'helpful' || item.kind === 'user' || item.passed === true));
       if (!trusted) continue;
       const key = `${decision.skillId}\u0000${decision.mode}\u0000${decision.contentHash}`;
-      const observationKey = JSON.stringify([entry.host, entry.taskType, entry.routeId, key]);
+      const observationKey = identity(entry,decision);
       const previous = observations.get(observationKey);
       if (previous) {
         if (previous.outcome !== decision.outcome) previous.conflicted = true;
