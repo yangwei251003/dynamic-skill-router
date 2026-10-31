@@ -67,14 +67,14 @@ test('closure does not override recovery, full routing, complexity or explicit r
 });
 
 test('fresh supplied-data routes have zero public Node directory enumeration',()=>{
- const url=pathToFileURL(resolve('src/advisor-v4.mjs')).href,pids=new Set();
+ const url=pathToFileURL(resolve('src/advisor-v4.mjs')).href,bootIds=new Set();
  for(const query of supplied){
-  const code=`import fs from 'node:fs';import fsp from 'node:fs/promises';const scans={sync:0,callback:0,promise:0};for(const [o,k,n] of [[fs,'readdirSync','sync'],[fs,'readdir','callback'],[fsp,'readdir','promise']]){const f=o[k];o[k]=function(...a){scans[n]++;return f.apply(this,a)}}fs.readdirSync('.');if(scans.sync!==1)throw Error('inactive tracer');scans.sync=0;const {routeTaskV4}=await import(${JSON.stringify(url)});const r=routeTaskV4(${JSON.stringify(query)},{host:'codex',contractVersion:4});console.log(JSON.stringify({pid:process.pid,scans,mode:r.performance.mode,cards:r.consultCandidates.length+r.capabilityCandidates.length,recovery:r.recoveryPlan.triggered}));`;
+  const code=`import {randomUUID} from 'node:crypto';const bootId=randomUUID();import fs from 'node:fs';import fsp from 'node:fs/promises';const scans={sync:0,callback:0,promise:0};for(const [o,k,n] of [[fs,'readdirSync','sync'],[fs,'readdir','callback'],[fsp,'readdir','promise']]){const f=o[k];o[k]=function(...a){scans[n]++;return f.apply(this,a)}}fs.readdirSync('.');if(scans.sync!==1)throw Error('inactive tracer');scans.sync=0;const {routeTaskV4}=await import(${JSON.stringify(url)});const r=routeTaskV4(${JSON.stringify(query)},{host:'codex',contractVersion:4});console.log(JSON.stringify({pid:process.pid,bootId,scans,mode:r.performance.mode,cards:r.consultCandidates.length+r.capabilityCandidates.length,recovery:r.recoveryPlan.triggered}));`;
   const run=spawnSync(process.execPath,['--input-type=module','-e',code],{encoding:'utf8',windowsHide:true,timeout:15000});
   assert.equal(run.status,0,run.stderr);const result=JSON.parse(run.stdout);
   assert.equal(result.mode,'fast',query);assert.equal(result.cards,0,query);assert.equal(result.recovery,false,query);
-  assert.deepEqual(result.scans,{sync:0,callback:0,promise:0},query);pids.add(result.pid);
+  assert.deepEqual(result.scans,{sync:0,callback:0,promise:0},query);assert.equal(result.pid,run.pid);assert.notEqual(result.pid,process.pid);bootIds.add(result.bootId);
   console.log(JSON.stringify({query,...result,scope:'public Node readdir APIs from before import; not all OS I/O'}));
  }
- assert.equal(pids.size,supplied.length);
+ assert.equal(bootIds.size,supplied.length);
 });

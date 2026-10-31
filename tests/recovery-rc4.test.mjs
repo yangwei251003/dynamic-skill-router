@@ -58,10 +58,10 @@ test('sufficiency hints do not erase explicitly requested entities or external a
 
 test('fresh-process synchronous and promise readdir instrumentation observes zero discovery in auto mode',()=>{
  const url=pathToFileURL(resolve('src/advisor-v4.mjs')).href;
- const pids=new Set();
+ const bootIds=new Set();
  for(const query of nativeQueries){
   for(let repeat=0;repeat<3;repeat++){
-  const code=`import fs from 'node:fs'; import fsp from 'node:fs/promises';
+  const code=`import {randomUUID} from 'node:crypto';const bootId=randomUUID();import fs from 'node:fs'; import fsp from 'node:fs/promises';
     let calls=0;
     for(const obj of [fs,fsp])for(const key of ['readdir','readdirSync'])if(typeof obj[key]==='function'){
       const original=obj[key];obj[key]=function(...args){calls++;return original.apply(this,args)};
@@ -69,14 +69,14 @@ test('fresh-process synchronous and promise readdir instrumentation observes zer
     fs.readdirSync('.'); if(calls!==1)throw Error('counter inactive');calls=0;
     const {routeTaskV4}=await import(${JSON.stringify(url)});
     const r=routeTaskV4(${JSON.stringify(query)},{contractVersion:4});
-    console.log(JSON.stringify({pid:process.pid,mode:r.performance.mode,calls,nativeHintPassed:false,cards:r.consultCandidates.length}));`;
+    console.log(JSON.stringify({pid:process.pid,bootId,mode:r.performance.mode,calls,nativeHintPassed:false,cards:r.consultCandidates.length}));`;
   const result=spawnSync(process.execPath,['--input-type=module','-e',code],{encoding:'utf8',timeout:15000});
   assert.equal(result.status,0,result.stderr||result.stdout);
   const evidence=JSON.parse(result.stdout.trim());
   assert.equal(evidence.mode,'fast',query);assert.equal(evidence.calls,0,query);assert.equal(evidence.cards,0);
-  assert(!pids.has(evidence.pid));pids.add(evidence.pid);
+  assert.equal(evidence.pid,result.pid);assert.notEqual(evidence.pid,process.pid);bootIds.add(evidence.bootId);
   console.log(JSON.stringify({scope:'fresh process; patched fs readdir APIs, not all OS I/O',repeat,...evidence}));
   }
  }
- assert.equal(pids.size,nativeQueries.length*3);
+ assert.equal(bootIds.size,nativeQueries.length*3);
 });
