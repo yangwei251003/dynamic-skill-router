@@ -4,6 +4,26 @@ V4 通过 `contractVersion: 4` 显式选择。`route_task` 接收完整用户原
 
 后续 `search_skills` 使用同一 routeId，按阶段或具体缺口检索。不得以查询替代新的用户授权，也不得把它当作第二次初始路由。候选卡可以被跳过；实际应用前须完整读取相应技能与当前阶段要求的资料。原生能力与技能建议并列比较，只有后者能改善任务结果时才加载。
 
+### 结构化能力缺口（4.3 候选）
+
+宿主已理解的具体缺口可作为 `taskContext.capabilityRequests` 提供，不必再次压成关键词。每项需要 `purpose`、非空 `evidenceRefs`，以及 `role` 或 `toolNames` 中至少一个。`evidenceRefs` 精确引用同一次 `taskContext.evidence` 条目的 `reference`；引用只建立来源联系，不证明该断言正确，更不授予权限。
+
+`role` 为 `local-execution / public-web-access / image-generation / image-observation / document-runtime / interface-observation / compilation-diagnostics`。角色只匹配工具真实用途；`toolNames` 只匹配当前运行时的精确名称。两者同时提供时必须同时匹配。每次最多 10 项缺口，每项最多 10 个名称；无需为没有缺口的任务填写。
+
+```json
+{
+  "taskContext": {
+    "evidence": [{"source":"user","reference":"input-data","claim":"用户要求只读指定本地数据并解释异常"}],
+    "capabilityRequests": [{"role":"local-execution","purpose":"读取指定源文件并在聊天返回统计","evidenceRefs":["input-data"]}]
+  },
+  "invocationContext": {"phase":"validation","readOnly":true,"networkForbidden":true}
+}
+```
+
+原文完整保存在 `task.originalRequest`。能力缺口在 `task.capabilityRequests` 与 `hostCapabilityCoverage` 单独呈现，不改变用户 `explicit` 点名、不永久保存运行时清单、不确认认证或联网可用。未知名称、缺少用途、证据引用不成立和不可用状态都有明确 unresolved 记录。指向另一个任务的旧工具条目不能替代当前元数据。
+
+`invocationContext.mode: plan`、`readOnly: true`、`networkForbidden: true` 只收紧范围；false 不解除用户原文的限制。建议可能保留为 `defer / skip / discover-first / check-scope`。宿主核对原文、输入、受保护对象及准确 schema 后决定调用，不因建议重复索要已有授权。没有能力缺口且原生足够时仍使用 `nativeSufficient:true`；有效缺口存在时不能同时靠它跳过发现。
+
 协作建议只使用实测可用工具、型号和槽位。有界 `workItems` 应包含目标、依赖、职责/允许文件、唯一 writer、验收条件；不默认需要审查 Agent。V4 查询、卡片和日志不执行 SFT/RL，也不保证成本降低。宿主会话未实测的能力必须注明待验证。
 
 V3 的 `NO_SKILL`、`ONE_SKILL`、`COMPOSED`、`selected`、`potential` 与 `explanation` 语义保持原契约，不得从 V4 卡片含义反推更改。

@@ -245,6 +245,9 @@ function closedTextOperation(assessment) {
 
 export function useFastPath(assessment, options, recovery) {
   if(recovery.triggered||options.routingMode==='full')return false;
+  // A validated, evidence-backed host gap is an explicit request for discovery,
+  // never an authorization. A contradictory nativeSufficient hint cannot hide it.
+  if(assessment.capabilityRequests?.length)return false;
   // Reuse the source-bound witness produced by taskAssessment so scope and
   // fast-path decisions cannot diverge through separate parsing limits.
   const closed=assessment.suppliedOperation||closedSuppliedTransformation(assessment.originalRequest||assessment.rawText||assessment.activeText);

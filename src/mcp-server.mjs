@@ -17,6 +17,7 @@ import { discoverCapabilities, adviseCapabilities } from './capabilities-v4.mjs'
 import {planRecovery} from './recovery-v4.mjs';
 import { discoverSkills, resolveDiscoveredSkill } from './discovery-v4.mjs';
 import { validateOutcomeV4 } from './feedback-v4.mjs';
+import {capabilityRequestsSchema} from './host-context-contract.mjs';
 
 const asResult = (value) => ({content: [{type: 'text', text: JSON.stringify(value, null, 2)}], structuredContent: value});
 const hostSchema = z.enum(['generic', 'codex', 'workbuddy', 'antigravity', 'claude', 'cursor']);
@@ -32,12 +33,14 @@ const taskContextSchema = z.object({
   complexity: z.enum(['low', 'medium', 'high']).optional(), complexityEvidence: z.array(z.string()).optional(),
   acceptanceCriteria: z.array(z.string()).optional(),
   capabilityNeeds: z.array(z.string()).optional().describe('宿主解释的当前能力缺口，仅用于检索，不授权行动'),
+  capabilityRequests:capabilityRequestsSchema.optional().describe('建议性结构化缺口。evidenceRefs须引用本次taskContext.evidence的reference；精确toolNames仅用于当前runtime工具召回，不等于用户点名或授权。'),
   evidence: z.array(z.object({source:z.enum(['user','project','runtime','reference','inference']),reference:z.string(),claim:z.string().optional()})).optional(),
 });
 const invocationContextSchema = z.object({
   phase:z.enum(['auto','discovery','planning','design','implementation','validation','delivery']).optional(),
   mode:z.enum(['plan','execute']).optional(),
   readOnly:z.boolean().optional().describe('true只收紧范围；false不能解除用户或宿主已有只读限制'),
+  networkForbidden:z.boolean().optional().describe('true只收紧联网范围；false不能解除原请求或宿主已有禁止联网限制'),
 });
 const runtimeSkillSchema = z.object({path: z.string(), id: z.string().optional(), provider: z.string().optional(), enabled: z.boolean().optional(), host: hostSchema.optional()});
 const discoveryFields = {host: hostSchema.optional().default('generic'), projectRoot: z.string().optional(), runtimeSkills: z.array(runtimeSkillSchema).optional()};

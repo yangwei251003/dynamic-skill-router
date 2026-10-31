@@ -1,4 +1,5 @@
 import {semanticTaskText,taskStructure} from './task-structure.mjs';
+import {normalizeCapabilityRequests} from './host-context-contract.mjs';
 import {randomUUID} from 'node:crypto';
 import {discoverSkills} from './discovery-v4.mjs';
 import {readFeedbackV4} from './feedback-v4.mjs';
@@ -256,6 +257,7 @@ export function taskAssessment(query, taskContext = {}, invocationContext = {}) 
   const domain = typeof taskContext.domain === 'string' ? taskContext.domain.trim() || null : null;
   const acceptanceCriteria = strings(taskContext.acceptanceCriteria);
   const capabilityNeeds = strings(taskContext.capabilityNeeds);
+  const capabilityRequestAssessment = normalizeCapabilityRequests(taskContext);
   const evidence = list(taskContext.evidence).filter(item => item && ['user','project','runtime','reference','inference'].includes(item.source)
     && typeof item.reference === 'string').map(item => ({source:item.source,reference:item.reference,claim:typeof item.claim==='string'?item.claim:undefined}));
   // Preserve host interpretation in its own fields, but do not use its proposed
@@ -276,6 +278,8 @@ export function taskAssessment(query, taskContext = {}, invocationContext = {}) 
     originalRequest: clauses.raw,
     suppliedOperation,
     acceptanceCriteria, capabilityNeeds, evidence,
+    capabilityRequests:capabilityRequestAssessment.requests,
+    capabilityRequestIssues:capabilityRequestAssessment.unresolved,
     taskStructure: structure,
     retrievalText: unique([structure.intentText, ...hostRetrieval]).join('\n'),
     interpretation: {source:'host-context',authority:'advisory-only',hostComplexity,complexityEvidence:hostEvidence,
@@ -669,6 +673,7 @@ function advise(query, options = {}, filters = {}) {
     performance:{mode:'full',scannedSkills:true,scannedCapabilities:true},
     capabilityCandidates:capabilities.candidates,
     capabilityNeedCoverage:capabilities.needCoverage,
+    hostCapabilityCoverage:capabilities.hostCapabilityCoverage,
     capabilityCoverage:{revision:capabilities.revision,...capabilities.coverage,errors:capabilities.errors},
     invocationPolicy:{phase:capabilities.phase,...capabilities.executionPolicy},
     task: assessment,

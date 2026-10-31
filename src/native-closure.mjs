@@ -196,7 +196,6 @@ export function closedSuppliedPresentation(raw) {
 
 const FORMAT_EFFECT=/https?:\/\/|[A-Za-z]:[\\/]|\b[\w-]+\.(?:csv|xlsx?|docx?|pdf|txt|json|png|jpe?g|py|js|mjs)\b|联网|查找|查询|检索|查证|核实|读取|读文件|打开|访问|调用|使用|发送|上传|发布|保存|导出|写入|创建|删除|安装|运行|执行|购买|支付|\b(?:look\s+up|lookup|search|verify|fetch|read|open|access|invoke|use|send|email|upload|publish|save|export|write|create|delete|install|run|execute|buy|pay)\b/i;
 const SOURCE_MISSING=/\.\.\.|…|未(?:提供|给出|填写)|待(?:提供|补充|填写)|缺失|未知|不知道|见附件|详见|\b(?:missing|unknown|unspecified|tbd|not\s+(?:provided|given)|see\s+(?:the\s+)?attachment)\b/i;
-const FORMAT_START=/^(?:(?:请|帮我|直接)\s*)*(?:(?:把|将)(?:这些|这段|这份|以下|下面|给定|已给出)(?:的)?(?:文字|文本|记录|数据|内容|清单)?\s*)?(?:整理|排版|改排|转换|转|编排|呈现|列)(?:成|为)|^(?:please\s+)?(?:turn|format|reformat|organi[sz]e|arrange|convert|present)\s+(?:this|these|the|it)(?:\s+[a-z][a-z-]{0,24}){0,5}?\s+(?:as|into|in)\s+/i;
 
 function formattingModifiers(text) {
   // Apply delivery/locative normalization before recognizing the operation,
@@ -208,30 +207,51 @@ function formattingModifiers(text) {
 
 function formattingInstruction(text) {
   text=formattingModifiers(text);
-  const reference=/^(?:please\s+)?(?:turn|format|reformat|organi[sz]e|arrange|convert|present)\s+((?:this|these|the|it)(?:\s+[a-z][a-z-]{0,24}){0,5}?)\s+(?:as|into|in)\s+/i.exec(text)?.[1];
-  if(reference&&(FORMAT_EFFECT.test(reference)||/\b(?:from|at|on|attached|external|online|latest|current)\b/i.test(reference)))return null;
-  if(FORMAT_START.test(text))return text;
+  // Parse the requested operation and its supplied-data reference separately
+  // from the output noun phrase. A reference's business name is opaque: it is
+  // not a list of aliases for every possible kind of schedule or record.
+  const body=text.replace(/^(?:(?:请|帮我|直接)\s*)+/,'').replace(/^please\s+/i,'');
+  const zh=/^(.*?)((?:整理|排版|改排|转换|转|编排|呈现|列)(?:成|为))\s*([\s\S]+)$/u.exec(body);
+  if(zh){
+    const reference=zh[1].trim();
+    if(reference.length<=80&&(!reference||/^(?:把|将)(?:这|以下|下面|给定|已给出)/u.test(reference))
+      &&!FORMAT_EFFECT.test(reference)&&!/(?:来自|附件|官网|文件|数据库|网页)/.test(reference))return '整理成'+zh[3];
+  }
+  const en=/^(?:turn|format|reformat|organi[sz]e|arrange|convert|present|put)\s+(.{1,100}?)\s+(?:as|into|in)\s+([\s\S]+)$/i.exec(body);
+  if(en){
+    const reference=en[1];
+    if(/^(?:this|these|the|it|them)\b/i.test(reference)&&!FORMAT_EFFECT.test(reference)
+      &&!/\b(?:from|at|on|attached|external|online|latest|current)\b/i.test(reference)
+      &&/^[\p{L}\p{N}_'’ -]+$/u.test(reference))return '整理成'+en[2];
+  }
   // Field selection is still a transformation over the same supplied fragment.
   // The field names are opaque; this does not assert that each requested value
   // exists, or authorize consulting a second source to fill an absent value.
-  const zh=/^(?:(?:请|帮我)\s*)*(?:从(?:这些|以下|给定)(?:记录|数据|文本|内容)(?:中)?)?提取([\p{L}\p{N}、和与及\s]{1,70})(?:并|，|,)\s*(?:整理|列|转换)(?:成|为)/u.exec(text);
-  const en=/^(?:please\s+)?extract\s+([\p{L}\p{N}_ ,'-]{1,70})\s+from\s+(?:this|these(?:\s+records)?|the\s+(?:given|supplied)\s+(?:text|records|data))\s+(?:into|as)\s+/iu.exec(text);
-  const match=zh||en;
+  const extractionZh=/^(?:(?:请|帮我)\s*)*(?:从(?:这些|以下|给定)(?:记录|数据|文本|内容)(?:中)?)?提取([\p{L}\p{N}、和与及\s]{1,70})(?:并|，|,)\s*(?:整理|列|转换)(?:成|为)/u.exec(text);
+  const extractionEn=/^(?:please\s+)?extract\s+([\p{L}\p{N}_ ,'-]{1,70})\s+from\s+(?:this|these(?:\s+records)?|the\s+(?:given|supplied)\s+(?:text|records|data))\s+(?:into|as)\s+/iu.exec(text);
+  const match=extractionZh||extractionEn;
   if(!match||FORMAT_EFFECT.test(match[1]))return null;
-  return (zh?'整理成':'turn this into ')+text.slice(match[0].length);
+  return '整理成'+text.slice(match[0].length);
 }
 
 function formatDirective(value) {
   const original=formattingInstruction(value.trim());
   if(!original)return null;
-  let text=original.replace(FORMAT_START,'');
-  // Delivery and preservation are instruction roles. Field labels stay opaque:
-  // this witness proves the source is present, not the model's interpretation.
+  let text=original.replace(/^整理成/,'').trim();
+  // An output noun phrase has a shape, optional cardinalities, and optional
+  // labels/style. Those roles are order-independent. Shape labels do not add
+  // actions; all remaining clauses still undergo the effect/constraint check.
+  const shape=/表格|\btable\b/i.exec(text)
+    ||/清单|列表|条目|\b(?:list|bullet points|bullets)\b/i.exec(text)
+    ||/(?:行|\b(?:lines?|rows?)\b)/i.exec(text);
+  if(!shape||shape.index>100)return null;
+  const prefix=text.slice(0,shape.index);
+  if(FORMAT_EFFECT.test(prefix)||!/^[-\p{L}\p{N}\s/|、,，“”「」『』"'‘’]+$/u.test(prefix||' '))return null;
   let columns=[];
-  text=text.replace(/^\s*[“「『"‘']([^”」』"’'\n]{1,100})[”」』"’']\s*/,(_,names)=>{columns=names.split(/\s*(?:\/|\||、|,|，)\s*/);return '';});
-  const format=/^\s*(?:(?:[\d一二三四五六七八九十两]+)(?:条|行|列|个)?\s*){0,2}(?:清单|列表|表格|条目)|^\s*(?:(?:a|an)\s+)?(?:(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)(?:[- ](?:row|column|item|line))?\s+){0,2}(?:(?:numbered|bulleted)\s+)?(?:table|list|bullets|bullet points)\b/i.exec(text);
-  if(!format)return null;
-  const formatText=format[0],columnCounts=[];
+  const labels=/[“「『"‘']([^”」』"’'\n]{1,100})[”」』"’']/.exec(prefix)?.[1]
+    ||/([\p{L}\p{N}_-]+(?:\s*\/\s*[\p{L}\p{N}_-]+)+)/u.exec(prefix)?.[1];
+  if(labels)columns=labels.split(/\s*(?:\/|\||、|,|，)\s*/);
+  const formatText=text.slice(0,shape.index+shape[0].length),columnCounts=[];
   const rowShape=formatText.replace(new RegExp('('+COUNT_ZH+')列|\\b('+COUNT_EN+')[ -]column\\b','gi'),(_,zh,en)=>{
     columnCounts.push(zh?declaredCount(zh):/^\d+$/.test(en)?Number(en):COUNT_WORDS.indexOf(en.toLowerCase())+1);return ' ';});
   const counts=presentationCounts(rowShape.replace(/-(?:row|item|line)\b/gi,' items')),columnCount=columnCounts[0]??null;
@@ -244,6 +264,7 @@ function formatDirective(value) {
     if(!positiveRequestPrefix(part))continue;
     if(FORMAT_EFFECT.test(part))return null;
     if(/^(?:保留|保持|只保留|列名为|表头为|包含列)(?:原顺序|原有顺序|[\p{L}\p{N}、和与及\s]{1,70})$|^(?:不补充|不增加|不添加)(?:任何)?内容$/u.test(part))continue;
+    if(/^[\p{L}\p{N}、和与及\s]{1,70}(?:保持|保留)(?:对应|一致|原顺序|原有顺序)$/u.test(part))continue;
     if(/^(?:with\s+[\p{L}\p{N}_ -]{1,70}\s+columns|(?:keep|preserve|retain|retaining)\s+[\p{L}\p{N}_ -]{1,70}|in\s+(?:the\s+)?(?:same|original|input)\s+order|only)$/iu.test(part))continue;
     return null;
   }

@@ -8,6 +8,8 @@
 
 普通任务从联合路由结果取 `capabilityCandidates`，不要再重复全量扫描。`scan_capabilities` 用于诊断库存（支持 kind、offset、limit）；阶段变化、实际能力缺口、工具失效时用 `search_capabilities`，必须复用 routeId，并按需要提供 phase 和本次真实 runtimeTools。任务已完成或已有充分资料时停止检索。
 
+当前宿主可用 `taskContext.capabilityRequests` 指明带来源的能力缺口（字段见 [V4 契约](router-contract-v4.md)）。这一通道按精确当前工具名或真实用途角色召回，不用词汇交集代替宿主已经明确的解释；不同缺口优先保留独立候选，预算不足时保留未覆盖状态。它不把宿主建议当用户点名，不修改可调用/已认证状态，也不越过原文、只读、离线、阶段、受保护对象或动作效果检查。仅取回候选与实际成功执行分别记录。
+
 ### 调用时机与执行
 
 - discovery/planning：仅为获取缺失资料、项目状态或方案依据调用搜索、读取类工具。

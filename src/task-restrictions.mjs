@@ -179,6 +179,11 @@ function restrictionTarget(clause) {
 // not erase the former. A separately requested artifact still keeps its scope.
 function readOnlyOperation(clause) {
  clause=operationWithoutLocation(clause).trim();
+ // Bare Chinese 只读 can be the read predicate itself when it directly governs
+ // a concrete resource token. This is distinct from a source adjective such as
+ // “原文件只读”. Resource placeholders (.csv) survive the input projection.
+ const resourceRead=/^(?:(?:请|先|再|然后|并且|并|帮我|严格)\s*)*只读\s*((?:[A-Za-z]:[\\/]|https?:\/\/|(?:[^\s,，;；]*\.)[a-z][a-z0-9]{1,7}\b)[^,，;；]*)/i.exec(clause);
+ if(resourceRead)return true;
  return /^\s*(?:(?:请|先|再|然后|并且|并|帮我|严格|\bplease\b)\s*)*只读(?:地)?(?:核对|核查|检查|审查|审阅|审核|核验|查看|读取|观察|诊断|评估|访问|分析|查询|检索|统计|提取)/i.test(clause)
   // Light verbs still govern an observational action: “进行安全复核” is
   // a review, while “做一个审查工具” names a new artifact and does not match.
@@ -267,6 +272,7 @@ export function assessRestrictions(userClauses, hostConstraints = [], invocation
   }
   if(invocation.mode==='plan')evidence.push({source:'host-plan-mode',scope:'all-writes'});
   if(invocation.readOnly===true)evidence.push({source:'host-read-only',scope:'all-writes'});
+  if(invocation.networkForbidden===true)networkEvidence.push({source:'host-network-restriction',scope:'network-access'});
   const sources=[...new Set(evidence.filter(x=>x.scope==='all-writes').map(x=>x.source))];
   const observationalOnly=!allowsSeparateOutput&&evidence.some(x=>x.source==='user-request'&&x.scope==='protected-target')&&observationalWorkOnly(positiveClauses);
   if(observationalOnly&&!sources.includes('user-request'))sources.push('user-request');

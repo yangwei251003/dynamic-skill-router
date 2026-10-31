@@ -7,6 +7,7 @@ import {currentWorkClauses} from './task-restrictions.mjs';
 import {imageArtifact} from './task-intents.mjs';
 import {requestedName} from './request-entities.mjs';
 import {semanticTaskText} from './task-structure.mjs';
+import {normalizeCapabilityRequests} from './host-context-contract.mjs';
 
 const list = x => Array.isArray(x) ? x : [];
 const norm = x => String(x || '').normalize('NFKC').toLowerCase();
@@ -368,9 +369,16 @@ function taskSubstrateNeeds(assessment) {
   const compilationDiagnostics=!explanationOnly&&/编译|\bcompil(?:e|ation)\b/i.test(positive)&&/诊断|\bdiagnos(?:tic|tics|e|is)\b/i.test(positive);
   const builtinDiagnostics=compilationDiagnostics&&/内置|\bbuilt[- ]in\b/i.test(positive)
     && !/(?:运行|执行|编写).{0,15}(?:脚本|命令)|\b(?:run|execute|write)\b.{0,25}\b(?:script|command)\b/i.test(positive);
+  // Reuse the restriction parser's witnessed operation and structured input
+  // role. A read-only attribute alone does not request reading its object.
+  const readOnlyLocalInput=list(assessment.restrictions?.evidence).some(item=>item?.source==='user-request'
+    && item.basis==='explicit-read-only-operation')
+    && list(assessment.taskStructure?.artifacts).some(item=>item.role==='input')
+    && /(?:[a-z]:[\\/]|\.{1,2}[\\/])|\.(?:csv|json|txt|md|log|xlsx?|docx?|pptx?|pdf|parquet)\b/i.test(
+      String(assessment.originalRequest||'').replace(/https?:\/\/[^\s<>"'，。；;]+/gi,''));
   return {
     'public-web-access': publicWebNeed(assessment),
-    'local-execution': !explanationOnly&&!interfaceRead&&!remoteOnly&&!builtinDiagnostics&&!(specialist.databaseRead&&!specialist.localWork) && (bridge || local && (execute || inspect&&files || create&&files&&!imageWork)),
+    'local-execution': !explanationOnly&&!interfaceRead&&!remoteOnly&&!builtinDiagnostics&&!(specialist.databaseRead&&!specialist.localWork) && (readOnlyLocalInput || bridge || local && (execute || inspect&&files || create&&files&&!imageWork)),
     'compilation-diagnostics': compilationDiagnostics,
     'document-runtime': !explanationOnly&&office&&(create||inspect||execute)&&!interfaceRead&&!remoteOnly,
     'image-observation': !explanationOnly&&localImage&&imageWork,
@@ -656,6 +664,182 @@ function bindOperation(entry,purpose,op,facets) {
     matches:matches.map(({facet,objects})=>({index:facet.index,source:facet.source,text:facet.text,actions:facet.actions,location:facet.location,matchedObjects:objects}))};
 }
 
+function capabilityGates({assessment,entry,op,scopedReadOnly,phase,networkForbidden,network,discovery,role,specialistNeeds,purpose,preserveRestrictionDecision=false}) {
+  let score=0;
+  const needsDelivery = op.phase==='delivery';
+  const deliveryRequested = phase==='delivery' && requestedDelivery(assessment,entry);
+  let decision = entry.callable && entry.kind==='tool' ? 'use-now' : 'discover-first';
+  const gates = ['confirm-task-benefit','inspect-exact-schema-and-inputs','respect-current-user-authorization'];
+  const protectedScopes=list(assessment.restrictions?.protectedScopes).filter(scope=>scope && typeof scope.clause==='string')
+    .map(scope=>({source:scope.source,scope:'protected-target',clause:scope.clause}));
+  if(protectedScopes.length)gates.push('preserve-protected-targets-and-check-output-destination');
+  if(/must load|read .{0,160}SKILL\.md|skill.*before|before.*skill/i.test(entry.description))gates.push('read-required-skill-before-invocation');
+  if (scopedReadOnly && !['read','unknown'].includes(op.effect)) { decision='skip'; gates.push('read-only-scope'); }
+  else if (scopedReadOnly && op.effect==='unknown' && entry.kind==='tool') { decision='defer'; gates.push('verify-read-only-effect-before-invocation'); }
+  else if (needsDelivery && !deliveryRequested) {decision='defer';gates.push('delivery-not-requested');score-=12;}
+  else if (entry.kind==='tool' && op.phase!=='discovery' && op.phase!==phase) {decision='defer';gates.push('different-task-phase');score-=8;}
+  else if (entry.kind==='tool' && op.effect!=='read') {decision='check-scope';gates.push('verify-effects-and-authorized-scope');}
+  if (!entry.callable) {
+    if(decision!=='skip'&&!(preserveRestrictionDecision&&decisionOrder[decision]>decisionOrder['discover-first']))decision='discover-first';
+    gates.push('runtime-callability-unverified');
+  }
+  if (entry.kind==='plugin') {decision='discover-first';gates.push('select-specific-tool-or-read-relevant-skill');}
+  if (entry.configurationConflict) {
+    gates.push('runtime-config-conflict-do-not-change-configuration');
+    if (decision==='use-now') decision='check-scope';
+  }
+  if (op.effect==='high-impact' || op.effect==='external-write') gates.push('check-destination-and-current-action-authorization');
+  if (networkForbidden) {
+    gates.push('preserve-offline-scope');
+    if (network==='network') { decision='skip'; gates.push('network-forbidden'); }
+    else if (network==='unknown' && decision!=='skip') { decision='defer'; gates.push('verify-no-network-before-invocation'); }
+  }
+  if(discovery?.role==='database-access')gates.push('verify-database-target-query-and-authentication-before-invocation');
+  if(role==='public-web-access')gates.push('verify-public-web-method-target-and-access-before-invocation');
+  if(specialistNeeds.localBrowser&&/\bbrowser\b|浏览器/i.test(purpose)){
+    gates.push('restrict-browser-to-authorized-local-target');
+    if(network==='network'){decision='skip';gates.push('remote-browser-not-authorized-for-local-target');}
+    else if(!(discovery?.supportsLocal || network==='local')&&decision!=='skip'){decision='defer';gates.push('verify-local-browser-target-support-before-invocation');}
+  }
+  return {decision,gates,protectedScopes,scoreAdjustment:score};
+}
+
+function structuredRole(purpose) {
+  const role=capabilityRole(purpose);
+  if(role)return role;
+  const opening=primaryPurpose(purpose);
+  if(/^(?:Generate|Create|Render|Edit)\s+(?:an?\s+|new\s+)?(?:images?|pictures?|photos?)\b/i.test(opening)
+    || /^(?:The\s+.{1,100}?\s+tool|This\s+tool|The\s+function)\s+(?:enables|supports)\s+image\s+(?:generation|editing)\b/i.test(opening))return 'image-generation';
+  return null;
+}
+
+function selectWithHostRequests(cards,needs,requests,limit) {
+  const base=selectCandidates(cards,needs,limit);
+  if(!requests.length)return base;
+  const selected=[],used=new Set();
+  const add=card=>{if(selected.length<limit&&!used.has(card.id)){selected.push(card);used.add(card.id);}};
+  // Actual user names retain priority. Host names never become user names.
+  base.filter(card=>card.explicit).forEach(add);
+  for(const request of requests){
+    if(selected.some(card=>card.hostRequestMatches?.some(item=>item.index===request.index)))continue;
+    const choice=cards.filter(card=>!used.has(card.id)&&card.decision!=='skip'
+      &&card.hostRequestMatches?.some(item=>item.index===request.index)).sort(candidateOrder)[0];
+    if(choice)add(choice);
+  }
+  base.forEach(add);
+  return selected;
+}
+
+function addStructuredCandidates(cards,assessment,options,inventory,purposes,phase,readOnly,networkForbidden,facets,specialistNeeds) {
+  // Revalidate direct callers through the same schema. Never trust a stored
+  // normalized marker as authority, and never inspect another task's state.
+  const input=options.taskContext || {capabilityRequests:assessment.capabilityRequests?.map(({role,toolNames,purpose,evidenceRefs})=>({
+    ...(role?{role}:{}),...(toolNames?.length?{toolNames}:{}),purpose,evidenceRefs})),evidence:assessment.evidence};
+  const normalized=normalizeCapabilityRequests(input);
+  const requests=normalized.requests,unresolved=[...(!options.taskContext?list(assessment.capabilityRequestIssues):[]),...normalized.unresolved];
+  // runtimeTools is the current invocation's observation. An inventory's
+  // provenance label is not a visibility protocol, and may describe history.
+  // Current purpose, hints and availability replace stale metadata rather than
+  // borrowing those facts from a row with a familiar-looking evidence string.
+  const observed=list(options.runtimeTools).filter(item=>item&&typeof item.name==='string'&&item.name.trim()).map(item=>{
+    const prior=inventory.capabilities.find(entry=>entry.kind==='tool'&&entry.name===item.name);
+    const available=typeof item.available==='boolean'?item.available:null;
+    return {...prior,id:`tool:${item.name}`,kind:'tool',name:item.name,
+      server:item.server||prior?.server||null,plugin:item.plugin||prior?.plugin||null,
+      description:text(String(item.description||'').split(/^\s*exec tool declaration\s*:/im)[0],16000),
+      annotations:item.annotations||{},enabled:available!==false,callable:available===true,runtimeAvailable:available,
+      evidence:prior?.evidence||'current-runtime-tool-metadata',
+      ...(prior?.callabilityEvidence?{callabilityEvidence:prior.callabilityEvidence}:{}),
+      currentObservation:item.observationSource||{source:'runtimeTools',available,scope:'current metadata only; authentication and business execution unverified'},
+      configurationConflict:available===true&&prior?.configurationEnabled===false};
+  });
+  const observedPrefixes=registryPurposePrefixes(observed);
+  const observedPurposes=new Map(observed.map(entry=>[entry.id,toolPurpose(entry.description,observedPrefixes)]));
+  if(requests.length)for(let index=cards.length-1;index>=0;index--){
+    const current=observed.find(entry=>entry.id===cards[index].id);
+    if(!current)continue;
+    if(current.runtimeAvailable===false){cards.splice(index,1);continue;}
+    cards[index].availability={...cards[index].availability,callable:current.callable,
+      runtimeAvailable:current.runtimeAvailable,currentObservation:current.currentObservation,
+      ...(current.callabilityEvidence?{callabilityEvidence:current.callabilityEvidence}:{})};
+    if(!current.callable){
+      if(decisionOrder[cards[index].decision]<decisionOrder['discover-first'])cards[index].decision='discover-first';
+      cards[index].gates=unique([...cards[index].gates,'runtime-callability-unverified']);
+    }
+  }
+  for(const request of requests){
+    const expected=request.toolNames.length?request.toolNames:[null];
+    for(const name of expected){
+      const available=observed.filter(entry=>(name===null||entry.name===name)
+        &&(!request.role||structuredRole(observedPurposes.get(entry.id)||'')===request.role));
+      if(!available.length){
+        const named=name&&observed.find(entry=>entry.name===name);
+        unresolved.push({index:request.index,toolName:name,reason:named?'role-or-purpose-mismatch':name?'unobserved-runtime-tool':'no-observed-role-match'});
+        continue;
+      }
+      for(const entry of available){
+        if(!entry.enabled||entry.runtimeAvailable===false){unresolved.push({index:request.index,toolName:entry.name,reason:'runtime-tool-unavailable'});continue;}
+        const purpose=observedPurposes.get(entry.id)||'';
+        if(!purpose.trim()){unresolved.push({index:request.index,toolName:entry.name,reason:'purpose-metadata-missing'});continue;}
+        const role=structuredRole(purpose),op=operation(entry,purpose),network=networkPurpose(purpose);
+        if(role==='local-execution'&&op.action==='execute')op.phase=phase;
+        const binding=bindOperation(entry,purpose,op,facets);
+        const scopedReadOnly=readOnly||binding.readOnly;
+        const gate=capabilityGates({assessment,entry,op,scopedReadOnly,phase,networkForbidden,network,
+          discovery:null,role,specialistNeeds,purpose,preserveRestrictionDecision:true});
+        gate.gates.push('host-context-is-retrieval-evidence-not-user-authorization');
+        if(gate.decision==='use-now')gate.decision='check-scope';
+        const denied=list(assessment.negativeRequests).some(clause=>String(clause).includes(entry.name));
+        if(denied){gate.decision='skip';gate.gates.push('explicit-user-exclusion');}
+        if(binding.objectMismatch||binding.mismatch||binding.unboundOutput){
+          if(gate.decision!=='skip')gate.decision='defer';
+          gate.gates.push('verify-host-suggestion-against-requested-object-and-action');
+        }
+        // Config or an old inventory row cannot prove this tool callable now.
+        const callable=entry.runtimeAvailable===true;
+        if(!callable){
+          // Unknown callability adds discovery work; it must not lower a
+          // read-only or unknown-network defer into a more permissive rank.
+          if(decisionOrder[gate.decision]<decisionOrder['discover-first'])gate.decision='discover-first';
+          gate.gates.push('runtime-callability-unverified');
+        }
+        const match={index:request.index,role:request.role||null,purpose:request.purpose,
+          evidenceRefs:request.evidenceRefs,source:'host-context',authority:'advisory-only'};
+        const existing=cards.find(card=>card.id===entry.id);
+        if(existing){
+          (existing.hostRequestMatches??=[]).push(match);
+          // A structured request cannot relax a restriction already found by
+          // the text route, and cannot turn unknown runtime status into true.
+          if(decisionOrder[gate.decision]>decisionOrder[existing.decision])existing.decision=gate.decision;
+          existing.description=purpose.slice(0,240);existing.effect=op.effect;
+          existing.availability={...existing.availability,enabled:entry.enabled,callable,
+            runtimeAvailable:entry.runtimeAvailable,evidence:entry.evidence,
+            currentObservation:entry.currentObservation,
+            ...(entry.callabilityEvidence?{callabilityEvidence:entry.callabilityEvidence}:{})};
+          existing.gates=unique([...existing.gates,...gate.gates]);
+          continue;
+        }
+        cards.push({id:entry.id,kind:'tool',name:entry.name,plugin:entry.plugin||null,server:entry.server||null,
+          description:purpose.slice(0,240),score:70+gate.scoreAdjustment,explicit:false,providerRequested:false,
+          matchedTerms:[],needMatches:[],hostRequestMatches:[match],capabilityRole:role,
+          requirementSource:'host-context',requirementEvidence:request.evidenceRefs,
+          availability:{discovered:true,enabled:entry.enabled,callable,evidence:entry.evidence,
+            runtimeAvailable:entry.runtimeAvailable??null,configurationEnabled:entry.configurationEnabled??null,
+            configurationConflict:entry.configurationConflict===true,currentObservation:entry.currentObservation,
+            ...(entry.callabilityEvidence?{callabilityEvidence:entry.callabilityEvidence}:{})},
+          decision:gate.decision,phase:op.phase,when:'按当前用户请求核对具体输入、范围、效果和阶段后，由宿主决定是否调用',
+          expectedBenefit:request.purpose,effect:op.effect,gates:gate.gates,
+          objectBindings:binding.matches,scopeReadOnly:scopedReadOnly,
+          ...(gate.protectedScopes.length?{protectedScopes:gate.protectedScopes}:{}),
+          ...(networkForbidden?{networkScope:{forbidden:true,purposeEvidence:network}}:{}),
+          invocation:{tool:entry.name,argumentPolicy:'Use the observed host schema and authorized task inputs.',executor:'host-agent',automaticallyExecuted:false},
+          reason:'宿主声明的能力缺口匹配当前真实工具；该建议不等于用户点名、授权或认证'});
+      }
+    }
+  }
+  return {requests,unresolved};
+}
+
 /** Produces host execution choices, never calls business tools itself. */
 export function adviseCapabilities(assessment, options = {}) {
   const inventory = options.capabilityIndex || discoverCapabilities(options);
@@ -836,38 +1020,8 @@ export function adviseCapabilities(assessment, options = {}) {
     const specialist=['revision','comment','shader','motion','animation','row','range','table','toolbar','generative','deck','video','job','progress','latex','module','reset','asset','paper','developer','thread','dependency','metadata','profile','handoff','usage','worktree','session','account','model','weave','folder'];
     if(!explicit&&!fillsSubstrate&&nameTerms.some(t=>specialist.includes(t)&&!queryTerms.has(t)))continue;
     score+=nameTerms.filter(t=>specialist.includes(t)&&queryTerms.has(t)).length*12;
-    const needsDelivery = op.phase==='delivery';
-    const deliveryRequested = phase==='delivery' && requestedDelivery(assessment,entry);
-    let decision = entry.callable && entry.kind==='tool' ? 'use-now' : 'discover-first';
-    const gates = ['confirm-task-benefit','inspect-exact-schema-and-inputs','respect-current-user-authorization'];
-    const protectedScopes=list(assessment.restrictions?.protectedScopes).filter(scope=>scope && typeof scope.clause==='string')
-      .map(scope=>({source:scope.source,scope:'protected-target',clause:scope.clause}));
-    if(protectedScopes.length)gates.push('preserve-protected-targets-and-check-output-destination');
-    if(/must load|read .{0,160}SKILL\.md|skill.*before|before.*skill/i.test(entry.description))gates.push('read-required-skill-before-invocation');
-    if (scopedReadOnly && !['read','unknown'].includes(op.effect)) { decision='skip'; gates.push('read-only-scope'); }
-    else if (scopedReadOnly && op.effect==='unknown' && entry.kind==='tool') { decision='defer'; gates.push('verify-read-only-effect-before-invocation'); }
-    else if (needsDelivery && !deliveryRequested) {decision='defer';gates.push('delivery-not-requested');score-=12;}
-    else if (entry.kind==='tool' && op.phase!=='discovery' && op.phase!==phase) {decision='defer';gates.push('different-task-phase');score-=8;}
-    else if (entry.kind==='tool' && op.effect!=='read') {decision='check-scope';gates.push('verify-effects-and-authorized-scope');}
-    if (!entry.callable) {decision=decision==='skip'?'skip':'discover-first';gates.push('runtime-callability-unverified');}
-    if (entry.kind==='plugin') {decision='discover-first';gates.push('select-specific-tool-or-read-relevant-skill');}
-    if (entry.configurationConflict) {
-      gates.push('runtime-config-conflict-do-not-change-configuration');
-      if (decision==='use-now') decision='check-scope';
-    }
-    if (op.effect==='high-impact' || op.effect==='external-write') gates.push('check-destination-and-current-action-authorization');
-    if (networkForbidden) {
-      gates.push('preserve-offline-scope');
-      if (network==='network') { decision='skip'; gates.push('network-forbidden'); }
-      else if (network==='unknown' && decision!=='skip') { decision='defer'; gates.push('verify-no-network-before-invocation'); }
-    }
-    if(discovery?.role==='database-access')gates.push('verify-database-target-query-and-authentication-before-invocation');
-    if(role==='public-web-access')gates.push('verify-public-web-method-target-and-access-before-invocation');
-    if(specialistNeeds.localBrowser&&/\bbrowser\b|浏览器/i.test(purpose)){
-      gates.push('restrict-browser-to-authorized-local-target');
-      if(network==='network'){decision='skip';gates.push('remote-browser-not-authorized-for-local-target');}
-      else if(!(discovery?.supportsLocal || network==='local')&&decision!=='skip'){decision='defer';gates.push('verify-local-browser-target-support-before-invocation');}
-    }
+    const {decision,gates,protectedScopes,scoreAdjustment}=capabilityGates({assessment,entry,op,scopedReadOnly,phase,networkForbidden,network,discovery,role,specialistNeeds,purpose});
+    score+=scoreAdjustment;
     cards.push({id:entry.id,kind:entry.kind,name:entry.name,plugin:entry.plugin || null,server:entry.server || null,
       description:purpose.slice(0,240),score,explicit,providerRequested:providerMentioned,matchedTerms:shared.slice(0,6),needMatches,
       ...(fillsSubstrate?{capabilityRole:role,requirementSource:'user-request',requirementEvidence:OUTCOME[op.phase]}:{}),
@@ -882,12 +1036,19 @@ export function adviseCapabilities(assessment, options = {}) {
       invocation:{tool:entry.kind==='tool'?entry.name:null,argumentPolicy:'Use the host tool schema and actual task inputs; do not invent parameters.',executor:'host-agent',automaticallyExecuted:false},
       reason:explicit?'用户在当前任务中点名此能力':fillsSubstrate?`任务需要 ${role}，该工具的具体用途可补足此缺口；输入及效果仍须核对`:`任务与能力共有具体信号：${shared.slice(0,4).join('、')}`});
   }
-  const candidates = selectCandidates(cards,needs,Math.min(10, Math.max(1,options.capabilityLimit || 5)));
+  const hostRequests=addStructuredCandidates(cards,assessment,options,inventory,purposes,phase,readOnly,networkForbidden,facets,specialistNeeds);
+  const candidates = selectWithHostRequests(cards,needs,hostRequests.requests,Math.min(10, Math.max(1,options.capabilityLimit || 5)));
   const covered = new Set(candidates.filter(card=>decisionOrder[card.decision]<2).flatMap(card=>card.needMatches.map(match=>match.index)));
   const needCoverage = {requested:needs,covered:needs.filter((_,index)=>covered.has(index)),uncovered:needs.filter((_,index)=>!covered.has(index)),
     verification:'Retrieval coverage only; tool execution and output quality remain unverified.'};
   return {revision:inventory.revision,coverage:inventory.coverage,errors:inventory.errors,phase,candidates,
     needCoverage,
+    hostCapabilityCoverage:{requests:hostRequests.requests.map(request=>{
+      const matched=candidates.filter(card=>card.hostRequestMatches?.some(item=>item.index===request.index));
+      return {index:request.index,purpose:request.purpose,evidenceRefs:request.evidenceRefs,
+        status:matched.some(card=>card.decision!=='skip')?'retrieved':matched.length?'restricted':'unresolved',
+        toolNames:matched.map(card=>card.name),authority:'advisory-only'};
+    }),unresolved:hostRequests.unresolved,verification:'Candidate retrieval only; execution, authorization and authentication remain host responsibilities.'},
     executionPolicy:{executor:'host-agent',advisoryOnly:true,scanExecutesTools:false,
       recheckAt:['initial-task','phase-change','capability-gap','tool-unavailable'],
       skipWhen:['native-tools-sufficient','no-specific-task-benefit','already-have-required-evidence'],
