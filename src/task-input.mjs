@@ -6,7 +6,9 @@ export function taskText(query = '') {
   return request
     .replace(/<image\b[^>]*>[\s\S]*?<\/image>/gi, '')
     .replace(/^\s*>.*$/gm, '')
-    .replace(/(?:[A-Za-z]:[\\/]|https?:\/\/)[^\s<>"']+/g, (value) => {
+    // A resource token ends at prose punctuation even when Chinese instructions
+    // follow without whitespace. Never consume the surrounding authorization.
+    .replace(/(?:[A-Za-z]:[\\/]|https?:\/\/)[^\s<>"'“”‘’「」『』：，。；！？、,;!?）)\]】]+/g, (value) => {
       const ext = /\.(pdf|docx|xlsx|csv|pptx|jpg|jpeg|png|webp|svg|mp4|wav|mp3|tex|bib|step|stp|stl|json|yaml|yml|toml|py|js|ts|md|ap17|eprj2)(?:[?#]|$)/i.exec(value);
       const fileType = ext ? ` .${ext[1]} ` : ' ';
       if (/^https?:/i.test(value)) {

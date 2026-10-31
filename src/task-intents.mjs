@@ -73,8 +73,11 @@ export const supportsLatexSourceRepair = skill => {
 export const mcpImplementation = text => /(?:^|[^a-z0-9_-])mcp(?=$|[^a-z0-9_-])/i.test(text)
  && (/(?:实现|开发|编写|创建|制作|生成|建立|做(?:一个|一套)?|调试|修复|构建|设计|build|implement|create|develop|debug|fix|design).{0,50}(?:\bmcp\b|stdio|streamable|服务|server)|(?:\bmcp\b|stdio).{0,40}(?:实现|开发|编写|构建|调试|修复|设计|implement|develop|debug|build|design)/i.test(text)
  || /inputSchema|invalid parameters|参数.{0,12}(?:错误|不符|类型)|(?:诊断|排查|检查|对照).{0,60}(?:协议|工具调用|参数|握手|初始化|schema|transport)|(?:debug|diagnose|inspect|check).{0,80}(?:schema|protocol|parameter|transport|handshake|initialization|capabilities)/i.test(text));
-export const structuredDataOperation = text => /\bcsv\b|\bxlsx\b|\bexcel\b|spreadsheet|google\s*sheets|表格|数据集|dataset|借阅记录|库存记录/i.test(text)
- && /清洗|汇总|去重|缺失|关联|分析报告|趋势分析|analysis report|trend analys|clean|aggregat|deduplicat|normaliz|\bjoin\b|missing|(?:数据|记录|列值|异常行|表格|单元格|单位).{0,12}(?:转换|换算|校验|异常|一致)|(?:统一|转换|换算|校验|异常).{0,12}(?:数据|记录|列值|异常行|表格|单元格|单位)/i.test(text);
+export const structuredDataOperation = text => {
+ const active=skillAuthoring(text)?taskStructure(text).clauses.flatMap(c=>c.split(/并且|同时|；|;|\band then\b|\band\b/iu)).filter(c=>!skillAuthoring(c)).join('\n'):text;
+ return /\bcsv\b|\bxlsx\b|\bexcel\b|spreadsheet|google\s*sheets|表格|数据集|dataset|借阅记录|库存记录/i.test(active)
+ && /清洗|汇总|去重|缺失|关联|分析报告|趋势分析|analysis report|trend analys|clean|aggregat|deduplicat|normaliz|\bjoin\b|missing|(?:数据|记录|列值|异常行|表格|单元格|单位).{0,12}(?:转换|换算|校验|异常|一致)|(?:统一|转换|换算|校验|异常).{0,12}(?:数据|记录|列值|异常行|表格|单元格|单位)/i.test(active);
+};
 // Formats establish the object; operations establish the requested work. A
 // destination CSV does not turn coordinate or geometry work into tabular EDA.
 export const spatialDataOperation = text => /\b(?:geojson|geopackage|shapefiles?|postgis|geospatial|geographic|crs|epsg)\b|\.shp\b|\.gpkg\b|坐标参考系|地理空间|空间数据|经纬度|点.{0,15}(?:多边形|所属面)|point.{0,20}polygon/i.test(text)
@@ -89,8 +92,20 @@ export const supportsVideoPostproduction = skill => {
   || /(?:edit(?:ing)?|cut(?:ting)?|trim(?:ming)?|transcod(?:e|ing)|compress(?:ion)?).{0,45}(?:videos?|footage|clips?)|(?:videos?|footage|clips?).{0,45}(?:edit(?:ing)?|cut(?:ting)?|trim(?:ming)?|transcod(?:e|ing))|extract frames or short clips|(?:剪辑|剪切|截取|转码|压缩).{0,20}视频|视频.{0,20}(?:剪辑|剪切|截取|转码|压缩)/i.test(summary);
 };
 export const backendImplementation = text => (/\b(?:fastapi|django|flask|express|nestjs|spring|asp\.net)\b|后端|服务端|服务器|\bhttp\b.{0,10}(?:服务|service|server)|\b(?:rest|graphql|grpc|endpoint)\b|(?:导入|查询|上传|认证|库存|http|api).{0,15}接口|接口.{0,15}(?:导入|查询|上传|认证|http|api)/i.test(text)
- || /\bnode\.?js\b/i.test(text)&&/服务|\b(?:service|api|http|idempotency|endpoint)\b/i.test(text))
- && (creationAction.test(text)||modificationAction.test(text)||/仓库|代码|repository|code/i.test(text));
+ || /\bnode\.?js\b/i.test(text)&&/服务|接口|\b(?:service|api|http|idempotency|endpoint)\b/i.test(text))
+ && (creationAction.test(text)||modificationAction.test(text)||/仓库|代码|调试|诊断|排查|复现|repository|code|\b(?:debug|diagnose|troubleshoot)\b/i.test(text));
+export const presentationArtifact = text => hasProducedFormat(text,/^pptx?$/i)
+ || taskStructure(text).clauses.some(clause=>/\bpptx?\b|powerpoint|幻灯片|演示文稿|课件|\b(?:presentation|slides?)\b|(?:teaching|training|pitch|slide) deck/i.test(clause)
+ && (creationAction.test(clause)||modificationAction.test(clause)||/交付|导出|输出|可编辑|\b(?:deliver|export|output|editable)\b/i.test(clause)));
+export const supportsPresentationAuthoring = (skill,text='') => {
+ const summary=String(skill.summaryZh||skill.description||'');
+ const purpose=summary.slice(0,650);
+ if(/governs content and structure|(?:仅|只).{0,8}(?:内容|视觉|排版).{0,12}(?:建议|指导)|technical work.{0,90}(?:also read|another skill)/i.test(summary))return false;
+ if(/\bpptx?\b|powerpoint|可编辑/i.test(text)&&/^(?:create|build|generate).{0,65}\bhtml presentations?\b/i.test(purpose))return false;
+ if(/可编辑|\beditable\b/i.test(text)&&/(?:one|single).{0,18}(?:image|picture).{0,18}(?:slide|page)|image.based|图片型|每页一张|全幅图片/i.test(purpose)
+   && !/editable|可编辑|真文本框/i.test(purpose))return false;
+ return /(?:creat(?:e|ing)|generat(?:e|ing)|edit(?:ing)?|produc(?:e|ing)|制作|创建|生成|编辑).{0,90}(?:powerpoint|pptx|presentations?|slides?|slide decks?|演示文稿|幻灯片)|(?:powerpoint|pptx|presentations?|slides?|演示文稿|幻灯片).{0,65}(?:creat|generat|edit|制作|创建|生成|编辑)/i.test(purpose);
+};
 export const designToCode = text => /\bfigma\b|设计稿|设计节点|design (?:file|node|mockup)/i.test(text)
  && /做成|转为|转成|实现|还原|开发|代码|组件|react|vue|html|implement|build|port|code|component/i.test(text);
 export const wordDocumentArtifact = text => hasProducedFormat(text,/^docx?$/i)
@@ -132,6 +147,7 @@ export function manualNeedKeys(skill, capability, text) {
  if(webImplementation(text)&&['visual-design','frontend-implementation'].includes(capability)&&supportsWebImplementation(skill))keys.push('web-implementation');
  if(designToCode(text)&&capability==='design-to-code')keys.push('design-to-code');
  if(backendImplementation(text)&&capability==='backend-implementation')keys.push('backend-implementation');
+ if(presentationArtifact(text)&&supportsPresentationAuthoring(skill,text))keys.push('presentation-artifact');
  if(capability==='document'&&(wordDocumentArtifact(text)?supportsWordAuthoring(skill):wordDocumentInspection(text)&&/\bdocx\b|\bword\b/i.test(identity+' '+summary)))keys.push('word-document');
  if(desktopObservation(text)&&capability==='desktop-operation')keys.push('desktop-observation');
  if(evidenceResearch(text)&&capability==='research')keys.push('evidence-research');

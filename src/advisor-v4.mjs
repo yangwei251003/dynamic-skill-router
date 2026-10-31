@@ -7,8 +7,9 @@ import {adviseCapabilities} from './capabilities-v4.mjs';
 import {planRecovery, useFastPath} from './recovery-v4.mjs';
 import {taskText} from './task-input.mjs';
 import {adviseTaskMethods} from './task-methods-v4.mjs';
-import {assessRestrictions} from './task-restrictions.mjs';
+import {assessRestrictions,negativeRequestPattern,positiveRequestPrefix,sharedEnglishNegation} from './task-restrictions.mjs';
 import {closedSuppliedProse} from './supplied-prose.mjs';
+import {closedSuppliedPresentation,closedSuppliedFormatting} from './native-closure.mjs';
 import {requestedName,unquoteRequestedNames} from './request-entities.mjs';
 import {webImplementation,evidenceResearch,cadArtifact,latexArtifact,mcpImplementation,imageArtifact,structuredDataOperation,accessibilityNeed,manualNeedKeys,backendImplementation,designToCode,wordDocumentArtifact,desktopObservation,skillAuthoring,publicInformationSearch,businessAnalysis,experimentWork,experimentDesign,electricalDesign,databaseMigration,electricalInspection,wordDocumentInspection,numericalComputation,optionComparison,gameImplementation,sourceCodeReview,latexSourceRepair} from './task-intents.mjs';
 
@@ -133,14 +134,28 @@ function queryClauses(query) {
   const namedQuotes = unquoteRequestedNames(reported);
   const withoutCode = namedQuotes.replace(/```[\s\S]*?```/g, ' ').replace(/`([^`]+)`/g, (_, inner) => /^\$[\p{L}\p{N}_.:-]+$/u.test(inner.trim()) ? inner.trim() : ' ');
   const sourceFiltered = withoutCode.replace(/(?:^|[。；;\n])\s*(?:参考资料|参考文档|网页上的|页面上的|文章中|文章里|文档中|文档里)[^。；;\n]*[“‘"][^。；;\n]*(?=[。；;\n]|$)/g,' ');
-  const withoutQuotes = sourceFiltered.replace(/[“"「『][^”"」』\n]*[”"」』]/g, ' ')
-    .replace(/‘[^’\n]*’|【[^】\n]*】/g, ' ')
-    .replace(/(^|[\s:：])'[^'\n]+'(?=\s|[.,，。;；]|$)/g, ' ')
+  // Masking a quoted sentence must not join its reporting prefix to a new
+  // current request. A direct first-person/current-turn imperative establishes
+  // that boundary; punctuation inside data alone does not authorize anything.
+  const quotedBoundaries=sourceFiltered.replace(/([”"」』])(?=\s*(?:我(?:现在|目前|只|这次|本轮)|现在(?:请|只|仅)|本轮(?:只|仅)|本次(?:只|仅)|(?:只|仅)(?:在|于)(?:本次|当前)?(?:聊天|对话)|请你?|I\s+(?:now|only)|please\b))/gi,'$1。');
+  // A quoted noun governed by an explicit prohibition remains its object.
+  // Keep only an inert target marker: quote contents never become commands,
+  // retrieval terms or permission. The original request retains the actual name.
+  const maskQuote=(quoted,offset,text)=>{
+    const prefix=text.slice(0,offset);
+    const prohibitedObject=/(?:不要|不得|禁止|不可|不允许|不准|不能|不)(?:直接|实际|再)?(?:修改|改动|写入|更改|变更|编辑|保存|删除|覆盖|重命名)\s*$|\b(?:do not|don't|must not|never)\s+(?:modify|change|write|edit|save|delete|overwrite|rename)\s*$/i.test(prefix);
+    if(!prohibitedObject)return ' ';
+    return /^(?:[“"「『‘【']\s*)(?:任何|所有|一切|any\b|all\b)/i.test(quoted)?' 所有对象 ':' 受保护的引用对象 ';
+  };
+  const withoutQuotes = quotedBoundaries.replace(/[“"「『][^”"」』\n]*[”"」』]/g, maskQuote)
+    .replace(/‘[^’\n]*’|【[^】\n]*】/g, maskQuote)
+    .replace(/'[^'\n]+'(?=\s|[.,，。;；]|$)/g, maskQuote)
     .replace(/^\s*>.*$/gm, ' ');
-  const clauses = withoutQuotes.split(/[。！？!?;；，,\n]+|而(?:是|要)|但是|但(?=请|要|需|改为|可以)|\bbut\b|\binstead\b/i).map((value) => value.trim()).filter(Boolean);
-  const futurePattern=/以后|将来|未来|后续|下一步|届时|日后|计划(?:再|之后)|(?:等|待)(?:我|用户|客户|审批|确认|授权).{0,20}(?:确认|批准|授权|同意|后)|(?:确认|批准|授权)后|\bafter\s+(?:approval|confirmation|I\s+(?:approve|confirm))|\bonce\s+(?:approved|confirmed|I\s+(?:approve|confirm))|eventually|later|future|subsequently/i;
+  const scopedClauses=sharedEnglishNegation(withoutQuotes);
+  const clauses = scopedClauses.split(/[。！？!?;；，,\n]+|\.(?=\s|$)|而(?:是|要)|但是|但(?=请|要|需|改为|可以)|\bbut\b|\binstead\b/i).map((value) => value.trim()).filter(Boolean);
+  const futurePattern=/以后|将来|未来|后续|下一步|届时|日后|(?:计划|准备|打算)(?:再|之后|以后)|(?:等|待)(?:我|用户|客户|审批|确认|授权).{0,20}(?:确认|批准|授权|同意|后)|(?:确认|批准|授权)后|\bafter\s+(?:approval|confirmation|I\s+(?:approve|confirm))|\bonce\s+(?:approved|confirmed|I\s+(?:approve|confirm))|eventually|later|future|subsequently/i;
   const isFuture = (value) => futurePattern.test(value);
-  const negativePattern=/不要|不得|禁止|不允许|不准|不能|不可|别用|不用|不使用|不调用|不启用|不采用|不(?:替我|帮我|公开|线上|在线)?(?:做|进行|制作|生成|编写|修改|重绘|导出|发布|写|新建|创建|提交|上传|下载|启动|发送|报名|执行|访问|运行|安装|连接|部署|注册|联系)|没有(?:线上|在线)?(?:发布|部署|上传)需求|无需|不需要|避免|do not|don't|must not|may not|cannot|can't|should not|shouldn't|never|without/i;
+  const negativePattern=negativeRequestPattern;
   const isNegative = (value) => negativePattern.test(value);
   const active = clauses.flatMap((value) => {
     if(/^(?:并)?(?:不是|并非|而非)|^(?:not\b|rather than\b)/i.test(value))return [];
@@ -157,13 +172,13 @@ function queryClauses(query) {
       || /^(?:please\s+)?(?:write|create|prepare|design)\b.*\bplan\b/i.test(usable);
     const planning = currentPlan ? usable.replace(/(?:未来|后续)(?=.{0,35}(?:计划|方案))/g, '').replace(/\bfuture\b/gi, '') : usable;
     const beforeFuture = planning.split(futurePattern)[0];
-    const beforeNegative = beforeFuture.split(negativePattern)[0];
+    const beforeNegative = positiveRequestPrefix(beforeFuture);
     return beforeNegative.trim() && !isNegative(beforeNegative) ? [beforeNegative.trim()] : [];
   });
   const constraintText = clauses.map(value => value.split(/(?:例如|比如|举例|示例|for example|e\.g\.)/i)[0]).join('\n');
   // Preserve sentence boundaries for scoped restrictions: a comma may continue
   // a protected object, whereas a new sentence can state a global prohibition.
-  const restrictionText=withoutQuotes.replace(/(?:例如|比如|举例|示例|for example|e\.g\.)[^。！？!?;；，,\n]*/gi,'');
+  const restrictionText=scopedClauses.replace(/(?:例如|比如|举例|示例|for example|e\.g\.)[^。！？!?;；，,\n]*/gi,'');
   return {active, future: clauses.filter(isFuture), negative: clauses.filter(isNegative), raw, constraintText, restrictionText};
 }
 
@@ -197,7 +212,7 @@ function independentHits(hits, active) {
 
 export function taskAssessment(query, taskContext = {}, invocationContext = {}) {
   const parsedClauses = queryClauses(query);
-  const suppliedOperation = closedSuppliedProse(taskText(query));
+  const suppliedOperation = closedSuppliedProse(taskText(query))||closedSuppliedPresentation(taskText(query))||closedSuppliedFormatting(query);
   // Only a complete input-closed grammar may remove data from retrieval. The
   // original request and actual restrictions remain available for host review.
   const clauses = suppliedOperation ? {...parsedClauses,active:[suppliedOperation.instructionText]} : parsedClauses;
@@ -298,6 +313,7 @@ export function scoreCandidate(skill, assessment, host, runtimeCapabilities, cal
   const active = semanticTaskText(assessment.activeText);
   const retrievalText = assessment.retrievalText || active;
   const names = explicitName(skill);
+  const manualNames=new Set(names.map(norm));
   // A plugin mention identifies its currently supplied runtime skills, not an
   // unrelated legacy skill which happens to share the package's name.
   if (skill.sourceId?.startsWith('plugin:')) names.push(skill.sourceId.slice(7));
@@ -307,7 +323,7 @@ export function scoreCandidate(skill, assessment, host, runtimeCapabilities, cal
   if (denied) return {skill,score:0,explicit:false,capability:inferCapability(skill),phase:inferSkillStage(skill),reasons:['explicit exclusion in user request'],availability:skillAvailability(skill,host,runtimeCapabilities),evidence:[]};
   const activeNameText=norm(assessment.activeText);
   const entityRequest=names.filter(name=>!/^[\x00-\x7f\p{Script=Han}]+$/u.test(name)||activeNameText.includes(norm(name)))
-    .map(name=>requestedName(assessment.activeClauses||[active],name)).find(Boolean);
+    .map(name=>requestedName(assessment.activeClauses||[active],name,{providerOnly:!manualNames.has(norm(name))})).find(Boolean);
   const explicit=!!entityRequest;
   if (assessment.selfContainedFunction && !explicit) return {
     skill, score: 0, explicit: false, capability: inferCapability(skill), phase: inferSkillStage(skill),
@@ -333,7 +349,7 @@ export function scoreCandidate(skill, assessment, host, runtimeCapabilities, cal
     || publicInformationSearch(retrievalText) && capability==='public-information-search'
     || skillAuthoring(retrievalText) && capability==='skill-authoring'
     || businessAnalysis(retrievalText) && needKeys.includes('business-analysis')
-    || needKeys.some(key=>['spatial-data','video-postproduction','mathematical-modeling','numerical-computation','option-comparison','game-implementation','source-code-review','latex-source-repair','cad-model'].includes(key))
+    || needKeys.some(key=>['spatial-data','video-postproduction','mathematical-modeling','numerical-computation','option-comparison','game-implementation','source-code-review','latex-source-repair','cad-model','presentation-artifact'].includes(key))
     || imageArtifact(retrievalText) && capability==='image-production' && skill.sourceId===host+'-system';
   const compatibleDomain=skillDomainCompatible(skill,retrievalText);
   const identityText=[skill.id,skill.name,skill.nameZh,...list(skill.aliases)].join(' ');
@@ -447,7 +463,7 @@ function candidateCard(item, assessment) {
   const {skill, score, explicit, capability, phase, reasons, availability, evidence} = item;
   const governance = capability === 'skill-governance';
   const action = availability.toolsAvailable === false ? 'skip'
-    : governance ? 'consult' : explicit ? 'consult' : score >= 20 ? 'consult' : 'skip';
+    : governance ? 'consult' : explicit ? 'consult' : item.actionMatch && item.needKeys.length > 0 ? 'consult' : score >= 20 ? 'consult' : 'skip';
   return {
     id: skill.id, nameZh: skill.nameZh || skill.name || skill.id,
     summaryZh: skill.summaryZh || skill.description || '',

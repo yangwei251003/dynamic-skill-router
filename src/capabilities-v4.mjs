@@ -202,6 +202,7 @@ function terms(value) {
 function operation(entry, describedPurpose) {
   const name = norm(entry.name.split('__').at(-1)).replace(/[_-]/g,' ');
   const purpose = primaryPurpose(describedPurpose ?? toolPurpose(entry.description));
+  const diagnostics = diagnosticCompilationPurpose(describedPurpose ?? toolPurpose(entry.description));
   if (entry.annotations?.destructiveHint === true) return {action:'commit',phase:'delivery',effect:'high-impact'};
   // General local runtimes can read or mutate. Classifying all execution as
   // writing would hide the only file reader in a read-only diagnostic task.
@@ -217,9 +218,15 @@ function operation(entry, describedPurpose) {
   // Mutating names dominate hints. Hints are descriptive metadata, never authorization.
   if (/\b(send|post message|reply|email send)\b/.test(name)) return {action:'communicate',phase:'delivery',effect:'external-write'};
   if (/\b(deploy|publish|release|merge|purchase|pay|delete|remove|drop|destroy)\b/.test(name)) return {action:'commit',phase:'delivery',effect:'high-impact'};
-  if (/\b(?:web|internet)\b/.test(norm(entry.name).replace(/_/g,' '))&&/^Tool for accessing (?:the )?internet\b/i.test(purpose))
+  if (publicWebPurpose(purpose)&&!/\b(?:create|update|edit|write|save|persist|insert|upload|push|apply|generate|mutate|change|set|add|build|install|reset|click|type|select|copy|import|export|move|rename)\b/.test(name))
     return {action:'read',phase:'discovery',effect:entry.annotations?.readOnlyHint===true?'read':'unknown'};
-  if (/\b(create|update|edit|write|save|persist|insert|upload|push|apply|execute|exec|run|query|generate|mutate|change|set|add|compile|build|install|reset|click|type|select|keyboard|mouse|duplicate|copy|import|export|move|rename)\b/.test(name)) return {action:'change',phase:'implementation',effect:'write-or-unknown'};
+  if (/\b(create|update|edit|write|save|persist|insert|upload|push|apply|execute|exec|run|query|generate|mutate|change|set|add|build|install|reset|click|type|select|keyboard|mouse|duplicate|copy|import|export|move|rename)\b/.test(name)
+      || /\bcompile\b/.test(name)&&!diagnostics) return {action:'change',phase:'implementation',effect:'write-or-unknown'};
+  // A compiler can expose a diagnostics-only operation. Its concrete contract
+  // distinguishes that operation from building/exporting an artifact; prose
+  // alone still does not verify effects or supply a readOnlyHint. Other
+  // mutating names above retain their conservative classification.
+  if (diagnostics) return {action:'verify',phase:'validation',effect:entry.annotations?.readOnlyHint===true?'read':'unknown'};
   // Native tool names need not contain an action (e.g. an opaque function name).
   // The actual purpose may establish a mutation, but prose never establishes a
   // read-only guarantee and cannot override the high-impact checks above.
@@ -255,13 +262,13 @@ function toolPurpose(description, commonParagraphs = new Set()) {
   // shared server rules. Those rules concern every tool, not this operation.
   if (serverAt>=0) return (paragraphs[serverAt+1] || paragraphs.slice(0,serverAt).join(' ')).slice(0,700);
   let [first='',second='']=paragraphs;
-  if (/^Manage (?:the|a|an) [^\n]+app:/i.test(first) && /^(?:Locate|Find|Get|Read|List|Create|Update|Open|End|Return|Start|Set)\b/i.test(second)) first=second;
+  if (/^Manage (?:the|a|an) [^\n]+app:/i.test(first) && /^(?:Locate|Find|Get|Read|List|Create|Update|Open|End|Return|Start|Set|Compile|Diagnose)\b/i.test(second)) first=second;
   if (/^Use `[^`]+` for [\s\S]*\bexecution\b/i.test(first) && /^Execute\s+(?:JavaScript|Python|code)\b/i.test(second)) first=second;
   // Some registries attach the same entire server workflow to every function.
   // It is not this function's purpose; its exact identifier is still usable.
   if (/^#{1,6}\s*(?:\d+[.)]\s*)?(?:WINDOW TARGETING|UI INTERACTION|Core Workflows)/i.test(first)) return '';
   const shortHeading=first.length<=80 && !/[.!?。！？:：]/.test(first);
-  const specificOperation=/^(?:search(?:es)?|find(?:s)?|get(?:s)?|read(?:s)?|fetch(?:es)?|retrieve(?:s)?|list(?:s)?|create(?:s)?|update(?:s)?|delete(?:s)?|render(?:s)?|inspect(?:s)?|validate(?:s)?|return(?:s)?|run(?:s)?|execute(?:s)?|capture(?:s)?|搜索|检索|读取|获取|列出|创建|更新|删除|渲染|检查|返回)\b/i;
+  const specificOperation=/^(?:search(?:es)?|find(?:s)?|get(?:s)?|read(?:s)?|fetch(?:es)?|retrieve(?:s)?|list(?:s)?|create(?:s)?|update(?:s)?|delete(?:s)?|render(?:s)?|inspect(?:s)?|validate(?:s)?|return(?:s)?|run(?:s)?|execute(?:s)?|capture(?:s)?|compile(?:s)?|diagnose(?:s)?|搜索|检索|读取|获取|列出|创建|更新|删除|渲染|检查|返回)\b/i;
   // Also accept metadata whose shared rules were stripped by the host. Never
   // switch to paragraphs starting with cross-tool directions such as "Use ...".
   return (shortHeading && specificOperation.test(second) ? second : first).slice(0,700);
@@ -282,12 +289,62 @@ function registryPurposePrefixes(capabilities) {
 // Capabilities are classified from their observed concrete purpose, not a
 // tool-name allowlist. These are substrate gaps, not extra user authorization.
 function capabilityRole(purpose) {
+  if (diagnosticCompilationPurpose(purpose)) return 'compilation-diagnostics';
+  if (publicWebPurpose(purpose)) return 'public-web-access';
   if (/^(?:Runs?|Executes?)\s+(?:a\s+)?(?:shell\s+)?command\b[^.!?]*\b(?:PTY|terminal|shell|local)\b/i.test(purpose)
     || /^Execute\s+(?:JavaScript|Python|code)\b[^.!?]*\b(?:persistent|local|repl|runtime)\b/i.test(purpose)) return 'local-execution';
   if (/^(?:Locate|Find|Discover)\b[^.!?]*\b(?:bundled|workspace)\b[^.!?]*\b(?:dependenc|runtime|librar)/i.test(purpose)) return 'document-runtime';
   if (/^(?:View|Inspect|Read)\b[^.!?]*\b(?:local|filesystem|disk)\b[^.!?]*\bimage\b|^(?:View|Inspect|Read)\b[^.!?]*\bimage\b[^.!?]*\b(?:local|filesystem|disk)\b/i.test(purpose)) return 'image-observation';
   if (/(?:^Reads?\s+(?:an?\s+)?observed element|\bcapture\b[^.!?]*\b(?:element tree|screenshot)\b|^Capture\b[^.!?]*\b(?:window|screen|monitor|desktop)\b)/i.test(purpose)) return 'interface-observation';
   return null;
+}
+
+function publicWebPurpose(purpose) {
+  const opening=primaryPurpose(purpose);
+  // A general public-web entry can expose several methods. Its own purpose
+  // establishes discovery, not a particular method, effect or authentication.
+  if (/\b(?:private|personal|account|mailbox|workspace|intranet|local|offline)\b|私人|账户|账号|内网|本地|离线/i.test(opening)) return false;
+  return /^(?:Tool for\s+)?(?:access(?:ing)?|brows(?:e|ing))\s+(?:the\s+)?(?:internet|public\s+web(?:sites?|pages?)?)\b/i.test(opening)
+    || /^(?:用于)?(?:访问|浏览)(?:互联网|公网|公开网站|公开网页)/.test(opening);
+}
+
+function publicWebNeed(assessment) {
+  const clauses=list(assessment.activeClauses).length?assessment.activeClauses:[assessment.activeText || ''];
+  const source=/官网|官方(?:网站|网页|来源|文档|资料|公告)|公开(?:网页|网站|来源|资料)|门户|互联网|\b(?:internet|public\s+(?:web|websites?|webpages?|sources?)|official\s+(?:web\s+)?(?:sites?|websites?|sources?|documentation|announcements?))\b|https?:\/\//i;
+  // Chinese lookup verbs admit ordinary aspect/reduplication, not just formal
+  // 查询. Bare 查/搜 require a request lead, avoiding nouns such as 调查表.
+  const retrieve=/(?:查(?:询|找|阅|看|证|一下|一查|下|查)|搜(?:索|一下|一搜|下|搜)|看(?:一下|一看|看)|(?:^|请|帮我|替我|先|再)\s*[查搜]|只搜|检索|核实|核查|核对|确认|获取|读取|访问|浏览|调研|标注|引用)|\b(?:search|look\s+up|find|check|verify|fetch|read|browse|visit|consult|research|cite)\b/i;
+  const work=currentWorkClauses(clauses.map(value=>requestEvidenceText(positiveRequestText(value))));
+  if(work.some(clause=>/^(?:请)?(?:只|仅)(?:用|使用|根据|依据|基于).{0,15}(?:给定|提供|粘贴|附上).{0,15}(?:正文|内容|摘录|资料|材料|文本)|^\s*(?:use|consult)\s+only\s+(?:the\s+)?(?:provided|supplied|pasted|attached)\b/i.test(clause)))return false;
+  const eligible=work.map(clause=>{
+    // Local copies, account records, and explanations are different inputs.
+    // Evaluate each work clause so a separate public lookup can still survive.
+    if (/本地|离线|私人|私有|账户|账号|登录后|我的.{0,12}(?:订单|账单|订阅|记录|数据)|个人(?:信息|记录|账单|订单|订阅)|\bmy\s+(?:orders?|invoices?|subscriptions?|records?|data)\b|\b(?:local|offline|private|personal|account|logged[- ]in|intranet)\b|localhost|127\.0\.0\.1|file:\/\//i.test(clause)) return false;
+    if (/^\s*(?:(?:please|only)\s+|请|只|仅|只需|仅需)*(?:explain|describe|how\b|解释|介绍|说明如何|如何)/i.test(clause)) return false;
+    if (/(?:给定|已提供|附上|粘贴).{0,15}(?:正文|内容|摘录|资料|材料|文本)|\b(?:provided|supplied|pasted|attached)\s+(?:text|content|excerpt|documents?)\b/i.test(clause)) return false;
+    return clause;
+  });
+  // A neighboring explicit source instruction can qualify the lookup clause;
+  // unrelated mentions or an excluded local/private clause cannot supply it.
+  const sourceInstruction=clause=>clause&&source.test(clause)
+    && /^(?:请)?(?:资料来源|信息来源|来源|出处|以|用|依据|根据)|^\s*(?:use|consult)\b.*\b(?:source|reference)\b/i.test(clause);
+  return eligible.some((clause,index)=>clause&&retrieve.test(clause)
+    && (source.test(clause)||sourceInstruction(eligible[index-1])||sourceInstruction(eligible[index+1])));
+}
+
+function diagnosticCompilationPurpose(purpose) {
+  // Require the operation itself to compile for diagnostics and separately
+  // describe reading without source changes and returning without export.
+  // Cross-tool instructions or a compiler's incidental log output do not do so.
+  return /^Compile\b[^.!?]*\breturn diagnostics\b/i.test(primaryPurpose(purpose))
+    && /\bReads?\b[^.!?]*\bwithout (?:modifying|changing|editing)\b/i.test(purpose)
+    && /\breturns? diagnostics without exporting\b/i.test(purpose);
+}
+
+function diagnosticCompilationObjectMatch(purpose, queryTerms) {
+  const source=primaryPurpose(purpose).split(/\b(?:documents?|projects?|files?|sources?)\b/i)[0];
+  return terms(source).some(term=>!GENERIC_SIGNALS.has(term)&&!PURPOSE_GENERIC.has(term)
+    && !['compile','saved','diagnostic'].includes(term)&&queryTerms.has(term));
 }
 
 function taskSubstrateNeeds(assessment) {
@@ -307,12 +364,54 @@ function taskSubstrateNeeds(assessment) {
   const remoteOnly=/google\s*(?:docs?|sheets?|slides?|drive)|docs\.google/i.test(positive)&&!/(?:生成|输出|保存|写).{0,50}本地|本地.{0,50}(?:生成|输出|保存|写)|\.(?:docx|xlsx|pptx)\b/i.test(positive);
   const localImage=/\.(?:png|jpe?g|webp|gif|tiff?|bmp)\b|(?:本地|原始|现有).{0,20}(?:图片|图像|照片)|\b(?:local|existing|source)\b.{0,20}\b(?:image|photo|picture)\b/i.test(positive);
   const imageWork=imageArtifact(positive)||/(?:观察|查看|检查|先看|\binspect\b|\bview\b|\bread\b).{0,60}(?:原图|照片|图片|图像|\.(?:png|jpe?g|webp|gif|bmp|tiff?)\b|\b(?:images?|photos?|pictures?)\b)/i.test(positive);
+  const specialist=taskSpecialistNeeds(assessment);
+  const compilationDiagnostics=!explanationOnly&&/编译|\bcompil(?:e|ation)\b/i.test(positive)&&/诊断|\bdiagnos(?:tic|tics|e|is)\b/i.test(positive);
+  const builtinDiagnostics=compilationDiagnostics&&/内置|\bbuilt[- ]in\b/i.test(positive)
+    && !/(?:运行|执行|编写).{0,15}(?:脚本|命令)|\b(?:run|execute|write)\b.{0,25}\b(?:script|command)\b/i.test(positive);
   return {
-    'local-execution': !explanationOnly&&!interfaceRead&&!remoteOnly && (bridge || local && (execute || inspect&&files || create&&files&&!imageWork)),
+    'public-web-access': publicWebNeed(assessment),
+    'local-execution': !explanationOnly&&!interfaceRead&&!remoteOnly&&!builtinDiagnostics&&!(specialist.databaseRead&&!specialist.localWork) && (bridge || local && (execute || inspect&&files || create&&files&&!imageWork)),
+    'compilation-diagnostics': compilationDiagnostics,
     'document-runtime': !explanationOnly&&office&&(create||inspect||execute)&&!interfaceRead&&!remoteOnly,
     'image-observation': !explanationOnly&&localImage&&imageWork,
     'interface-observation': !explanationOnly&&interfaceRead,
   };
+}
+
+function taskSpecialistNeeds(assessment) {
+  const clauses=list(assessment.activeClauses).length?assessment.activeClauses:[assessment.activeText || ''];
+  const positive=currentWorkClauses(clauses.map(positiveRequestText)).join(' ');
+  const explanationOnly=/^\s*(?:explain|describe|what\b|how\b|介绍|解释|讲讲|什么是|如何)/i.test(positive)
+    && !/请实际|实际(?:运行|读取|检查|测试|试玩)|\bactually\s+(?:run|read|inspect|test|query)\b/i.test(positive);
+  const browserObject=/浏览器|网页|页面|\b(?:browser|web(?:page|site)?|html|frontend|playwright)\b/i.test(positive);
+  const browserValidation=!explanationOnly&&browserObject&&/试玩|截图|截屏|渲染|实际.{0,12}(?:检查|测试|验证|操作)|\b(?:test|verify|validate|playtest|screenshot|render|interact)\b/i.test(positive);
+  const databaseRead=!explanationOnly&&/数据库|数据表|(?:指定|现有|项目|的).{0,50}表|\b(?:database|postgres(?:ql)?|sql|tables?|rows?)\b/i.test(positive)
+    && /查询|聚合|分组计数|统计.{0,20}行数|\b(?:query|queries|aggregate|count|group by|read)\b/i.test(positive);
+  return {browserValidation,databaseRead,
+    localBrowser:browserValidation&&/本地|离线|loopback|localhost|127\.0\.0\.1|file:\/\/|\b(?:local|offline)\b/i.test(positive),
+    localWork:/本地|离线|文件|目录|脚本|\b(?:local|offline|filesystem|files?|directories|scripts?|source code)\b|\.(?:csv|json|sql|sqlite|db|py|js|html|xlsx?|docx?|pptx?|pdf|parquet)\b/i.test(positive)};
+}
+
+// Containers may establish a concrete discovery gap, never a callable action
+// or an authenticated connection. An exact parent may supply missing metadata.
+function specialistDiscovery(entry, inventory, needs, providerMentioned) {
+  if(entry.kind==='tool')return null;
+  const parent=entry.kind==='mcp'&&entry.plugin
+    ? inventory.capabilities.find(item=>item.kind==='plugin'&&item.plugin===entry.plugin):null;
+  const description=entry.description || parent?.description || '';
+  const statements=description.split(/\n+|(?<=[.!?])\s+(?=[A-Z])/).map(x=>x.trim()).filter(x=>x&&!/^(?:do not|don't|not |never |不得|不要|不支持)/i.test(x));
+  if(needs.browserValidation){
+    const purpose=statements.find(x=>/\bbrowser\b|浏览器/i.test(x)&&/\b(?:automation|automate|testing|test|playtesting|screenshot|navigate|click)\b|测试|试玩|截图|自动化/i.test(x));
+    if(purpose)return {role:'browser-validation',phase:'validation',purpose,network:networkPurpose(purpose),
+      supportsLocal:/\blocal\b|localhost|127\.0\.0\.1|file:\/\/|本地|离线/i.test(purpose),sourceId:parent?.id || entry.id};
+  }
+  if(needs.databaseRead&&providerMentioned){
+    const purpose=statements.find(x=>/\b(?:database|postgres(?:ql)?|sql)\b|数据库/i.test(x)
+      && /\b(?:query|queries|querying|read|aggregate|select)\b|查询|读取|聚合/i.test(x));
+    if(purpose)return {role:'database-access',phase:'discovery',purpose,
+      network:entry.transport==='remote'?'network':networkPurpose(purpose),sourceId:parent?.id || entry.id};
+  }
+  return null;
 }
 
 // Secondary instructions often mention tools, inputs and artefacts that this
@@ -332,6 +431,7 @@ function concretePurposeMatch(purpose, queryTerms) {
 
 function networkPurpose(purpose) {
   const opening=primaryPurpose(purpose);
+  if (publicWebPurpose(opening)) return 'network';
   // Classify the operation's purpose, never a provider's name or read-only
   // annotation. Local execution can be constrained by the host's inputs.
   const remote=/\b(?:internet|public web|web search|online|remote|cloud(?:flare)?|deployed|hosted|connected (?:account|service|workspace))\b|联网|公网|云端|远程服务|在线服务/i.test(opening);
@@ -379,7 +479,7 @@ function requestEvidenceText(value) {
 function currentPhase(active, given) {
   if (given && given!=='auto') return given;
   active=currentWorkClauses(String(active||'').split(/[\n。；;，,]+/).map(positiveRequestText)).join(' ');
-  if (/测试|验证|排查|调试|检查|test|validat|debug|verify|inspect|check/i.test(active)) return 'validation';
+  if (/测试|验证|排查|调试|检查|诊断|test|validat|debug|verify|inspect|check|diagnos/i.test(active)) return 'validation';
   if (/部署|上线|发布|发送|删除|deploy|publish|send|delete|merge/i.test(active)) return 'delivery';
   if (/实现|修改|编辑|修图|抠图|修复|编写|开发|构建|生成|制作|绘制|(?<![a-z0-9_./\\-])(?:implement|build|fix|edit|develop|create|generate|draw|render|retouch|write|save|copy|duplicate|import|export)(?![a-z0-9_./\\-])/i.test(active)) return 'implementation';
   if (/设计|design/i.test(active)) return 'design';
@@ -400,13 +500,15 @@ function selectCandidates(cards, needs, limit) {
       && (card.matchedTerms.filter(term=>!GENERIC_SIGNALS.has(term)).every(term=>other.matchedTerms.includes(term))
         || resourceFamilies(card.description).some(family=>resourceFamilies(other.description).includes(family))))));
   const ordered = concrete.filter(card => card.kind==='tool' || !concrete.some(other=>other.kind==='tool'
-    && ((card.plugin && other.plugin===card.plugin) || other.server===card.name
-      || terms(card.name).some(term=>other.matchedTerms.includes(term)))
+    && ((card.plugin && other.plugin===card.plugin) || other.server===card.name)
+    && (!card.capabilityRole || other.capabilityRole===card.capabilityRole)
     && decisionOrder[other.decision]<=2)).sort(candidateOrder);
   // Shell and a persistent language runtime solve the same execution gap.
   // Keep an alternative only when it was explicitly requested independently.
-  const sorted=ordered.filter((card,index)=>card.capabilityRole!=='local-execution'||card.explicit
-    || !ordered.slice(0,index).some(other=>other.capabilityRole===card.capabilityRole&&decisionOrder[other.decision]<=decisionOrder[card.decision]));
+  const sorted=ordered.filter((card,index)=>card.explicit || !ordered.slice(0,index).some(other=>
+    other.capabilityRole===card.capabilityRole&&decisionOrder[other.decision]<=decisionOrder[card.decision]
+    && (['local-execution','browser-validation'].includes(card.capabilityRole)
+      || card.capabilityRole==='database-access'&&other.plugin===card.plugin)));
   if (needs.length < 2) return sorted.slice(0,limit);
   const selected = [], selectedIds = new Set(), covered = new Set();
   const add = card => {
@@ -456,6 +558,7 @@ function requestedDelivery(assessment, entry) {
 
 function positiveRequestText(value) {
   return String(value || '')
+    .replace(/(?:没有|未获)[^。；;\n，,]{0,180}(?:授权|许可)/g,' ')
     .replace(/(?:不要|禁止|不得|不再|不必|无需|不需要|不(?:读|读取|改|更改|更新|编辑|保存|创建|新建|写|制作|生成|复制|发布|部署|发送|评论|分享|注册|购买|点击|关闭|导出|导入|上传|运行))[^，。；\n]*/g,' ')
     .replace(/\b(?:do not|don't|must not|without)\s+(?:read\w*|inspect\w*|edit\w*|modif\w*|creat\w*|writ\w*|sav\w*|generat\w*|mak\w*|cop(?:y|ies|ied|ying)|publish\w*|deploy\w*|send\w*|comment\w*|shar\w*|register\w*|purchas\w*|click\w*|clos\w*|export\w*|run\w*)\b[^,.\n;]*/gi,' ');
 }
@@ -559,6 +662,7 @@ export function adviseCapabilities(assessment, options = {}) {
   const commonPrefixes=registryPurposePrefixes(inventory.capabilities);
   const purposes=new Map(inventory.capabilities.map(entry=>[entry.id,toolPurpose(entry.description,commonPrefixes)]));
   const substrateNeeds=taskSubstrateNeeds(assessment);
+  const specialistNeeds=taskSpecialistNeeds(assessment);
   const active = assessment.activeText || '';
   const needs = unique(list(assessment.interpretation?.retrievalCapabilityNeeds ?? assessment.capabilityNeeds).filter(value=>typeof value==='string').map(value=>value.trim()));
   // Excluded actions are restrictions, not positive retrieval evidence. Keep
@@ -592,22 +696,28 @@ export function adviseCapabilities(assessment, options = {}) {
     if (!entry.enabled) continue;
     if (entry.kind==='mcp' && entry.tools.length) continue; // Tools provide the actionable granularity.
     // Purpose text carries more signal than cross-tool instructions and examples.
-    const purpose=purposes.get(entry.id);
-    const network=networkPurpose(purpose);
-    const role=entry.kind==='tool'?capabilityRole(purpose):null;
-    const fillsSubstrate=Boolean(role&&substrateNeeds[role]);
+    const providerMentioned=[...(entry.kind==='tool'?[]:[entry.name,entry.displayName]),entry.plugin,entry.server,declaredProvider(entry)].some(value=>value&&providerKey(value).length>2
+      && (`-${normalizedActive}-`).includes(`-${providerKey(value)}-`));
+    const discovery=specialistDiscovery(entry,inventory,specialistNeeds,providerMentioned);
+    const purpose=discovery?.purpose || purposes.get(entry.id);
+    const network=discovery?.network || networkPurpose(purpose);
+    const role=entry.kind==='tool'?capabilityRole(purpose):discovery?.role || null;
+    const fillsSubstrate=Boolean(discovery || role&&substrateNeeds[role]
+      && (role!=='compilation-diagnostics'||diagnosticCompilationObjectMatch(purpose,queryTerms)));
     const explicit=isExplicit(entry);
+    if(['compilation-diagnostics','public-web-access'].includes(role)&&!explicit&&!fillsSubstrate)continue;
     if (networkForbidden && network==='network' && !explicit) continue;
-    const op = entry.kind==='tool' ? operation(entry,purpose) : {action:'discover',phase,effect:'unknown'};
+    if(specialistNeeds.localBrowser&&/\bbrowser\b|浏览器/i.test(purpose)&&network==='network'&&!explicit)continue;
+    const op = entry.kind==='tool' ? operation(entry,purpose) : {action:'discover',phase:discovery?.phase || phase,effect:'unknown'};
     if(role==='local-execution'&&fillsSubstrate&&op.action==='execute')op.phase=phase;
-    if(role&&role!=='local-execution'&&['read','unknown','verify'].includes(op.action))Object.assign(op,{action:'read',phase:'discovery',effect:entry.annotations?.readOnlyHint===true?'read':'unknown'});
+    if(role&&!['local-execution','compilation-diagnostics'].includes(role)&&['read','unknown','verify'].includes(op.action))Object.assign(op,{action:'read',phase:'discovery',effect:entry.annotations?.readOnlyHint===true?'read':'unknown'});
     // A shared action such as search/export/status does not establish the
     // requested object. Personal communication and workspace APIs need a
     // matching domain or an explicit capability need supplied by the host.
     const identityText=norm(`${entry.name} ${entry.plugin || ''} ${entry.server || ''}`);
     // A configured plugin is a discovery container, not a task-specific
     // operation. Its generic marketing description alone is insufficient.
-    if(entry.kind==='plugin'&&!explicit)continue;
+    if(entry.kind==='plugin'&&!explicit&&!discovery)continue;
     const scopedSources=[
       [/github/,/github|gitlab|代码库|代码仓库|git仓库|开源项目|\brepositor(?:y|ies)\b|\bopen[- ]source\b|\bpull request\b/i],
       [/google.?drive/,/google\s*(?:drive|docs?|sheets?|slides?)|谷歌云盘|云盘|云端文档|docs\.google/i],
@@ -671,8 +781,6 @@ export function adviseCapabilities(assessment, options = {}) {
     // or brand alone never earns this narrow exception.
     const exactReadObject=op.action==='read'&&wantsRead&&nonBrand.some(term=>!GENERIC_SIGNALS.has(term)&&terms(entry.name).includes(term));
     if (!explicit && !fillsSubstrate && shared.length<2&&!exactReadObject) continue;
-    const providerMentioned=[entry.plugin,entry.server,declaredProvider(entry)].some(value=>value && providerKey(value).length>2
-      && (`-${normalizedActive}-`).includes(`-${providerKey(value)}-`));
     if(entry.kind==='tool'&&!explicit&&!fillsSubstrate&&entry.plugin&&nonBrand.length===0)continue;
     if(!explicit&&!fillsSubstrate&&!providerMentioned&&!scopedWorkspaceRead&&!nonBrand.some(x=>!GENERIC_SIGNALS.has(x)))continue;
     // Reject tool purposes explicitly excluding the requested domain.
@@ -753,9 +861,17 @@ export function adviseCapabilities(assessment, options = {}) {
       if (network==='network') { decision='skip'; gates.push('network-forbidden'); }
       else if (network==='unknown' && decision!=='skip') { decision='defer'; gates.push('verify-no-network-before-invocation'); }
     }
+    if(discovery?.role==='database-access')gates.push('verify-database-target-query-and-authentication-before-invocation');
+    if(role==='public-web-access')gates.push('verify-public-web-method-target-and-access-before-invocation');
+    if(specialistNeeds.localBrowser&&/\bbrowser\b|浏览器/i.test(purpose)){
+      gates.push('restrict-browser-to-authorized-local-target');
+      if(network==='network'){decision='skip';gates.push('remote-browser-not-authorized-for-local-target');}
+      else if(!(discovery?.supportsLocal || network==='local')&&decision!=='skip'){decision='defer';gates.push('verify-local-browser-target-support-before-invocation');}
+    }
     cards.push({id:entry.id,kind:entry.kind,name:entry.name,plugin:entry.plugin || null,server:entry.server || null,
       description:purpose.slice(0,240),score,explicit,providerRequested:providerMentioned,matchedTerms:shared.slice(0,6),needMatches,
       ...(fillsSubstrate?{capabilityRole:role,requirementSource:'user-request',requirementEvidence:OUTCOME[op.phase]}:{}),
+      ...(discovery?{discoveryEvidence:{sourceId:discovery.sourceId,purpose:discovery.purpose,scope:'functional-discovery-only; callability, authentication and effects unverified'}}:{}),
       availability:{discovered:true,enabled:entry.enabled,callable:entry.callable,evidence:entry.evidence,
         ...(entry.runtimeAvailable!==undefined?{runtimeAvailable:entry.runtimeAvailable,configurationEnabled:entry.configurationEnabled,configurationConflict:entry.configurationConflict}:{})},
       decision,phase:op.phase,when:networkForbidden&&network==='network'?'当前请求禁止联网，不能调用此联网能力':networkForbidden&&network==='unknown'?'先核对准确 schema 与输入，确认不会联网后再评估调用；确认前暂缓':scopedReadOnly && op.effect==='unknown' && entry.kind==='tool'?'先核对准确 schema 与输入，确认无写入效果后再评估调用；确认前暂缓':decision==='defer'?'仅到相应阶段且用户目标需要时再评估':decision==='discover-first'?'先按需发现工具或读取相关技能，确认当前会话可用':`当前 ${phase} 阶段，且缺少其能提供的结果时`,

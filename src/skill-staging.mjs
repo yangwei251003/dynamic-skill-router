@@ -2,6 +2,7 @@ import {webImplementation,evidenceResearch,cadArtifact,latexArtifact,mcpImplemen
 import {semanticTaskText} from './task-structure.mjs';
 import {primaryPurpose as manualPurpose} from './purpose-evidence.mjs';
 import {latexBuild,latexFailure,supportsLatexBuild,sourceCodeReview,supportsSourceCodeReview} from './task-intents.mjs';
+import {specialistPurposeCompatible} from './skill-staging-purpose.mjs';
 
 export const PIPELINE_STAGES = [
   'discovery',
@@ -43,8 +44,8 @@ export function inferCapability(skill = {}) {
   if (/computer[-_ ](?:operator|use)|desktop[-_ ](?:operator|automation)|电脑操作|桌面操作/.test(identity)) return 'desktop-operation';
   if (/git[-_ ]ship|(?:git|版本控制).{0,15}(?:交付|发布|收尾)/.test(identity)
       || /(?:git 工作流|git workflow).{0,25}(?:发布|ship)/.test(summary)) return 'release-workflow';
-  if (/fastapi|django|flask|express|nestjs|spring[-_ ]boot|backend[-_ ](?:pattern|develop|implementation)|api[-_ ]design/.test(subject)
-      || /^(?:rest api design|backend development|server.side development)/.test(summary)) return 'backend-implementation';
+  if (/fastapi|django|flask|express|nestjs|quarkus|spring[-_ ]?boot|backend[-_ ](?:pattern|develop|implementation)|api[-_ ]design/.test(subject)
+      || /^(?:rest api design|backend (?:architecture|development)|server.side development)/.test(summary)) return 'backend-implementation';
   if (/skill-creator|create-skill|plugin-creator/.test(identity)) return 'skill-authoring';
   if (/easyeda|kicad|pcb[-_ ](?:design|layout)|electronic[-_ ]design/.test(subject)) return 'electrical-design';
   if (/database[-_ ]migration|schema[-_ ]migration/.test(subject)
@@ -157,7 +158,7 @@ const CAPABILITY_SIGNALS = {
   'web-extraction': /抓取|采集|爬虫|爬取|scrape|crawl|提取网页/i,
   'browser-automation': /浏览器|点击|登录|填表|截图|e2e|端到端|playwright/i,
   spreadsheet: /excel|xlsx|csv|电子表格|工作簿|表格文件/i,
-  presentation: /pptx?|幻灯片|演示文稿|汇报材料|slide|presentation/i,
+  presentation: /pptx?|powerpoint|幻灯片|演示文稿|课件|汇报材料|slide|presentation|(?:teaching|training|pitch) deck/i,
   document: /word|docx|pdf|markdown|文档/i,
   'data-analysis': /数据分析|统计|分析报告|图表|可视化|数据洞察|dataset/i,
   citation: /引用|参考文献|doi|citation/i,
@@ -218,6 +219,7 @@ export function capabilityActionCompatible(capability, query) {
 export function skillDomainCompatible(skill, query) {
   const {id, identity, summary} = normalizedFields(skill);
   const text = semanticTaskText(query).toLowerCase();
+  if(!specialistPurposeCompatible(skill,text))return false;
   if (id === 'council-multi-model' && !/评议会|council|外部.{0,8}(?:评审|批评)|external critique/i.test(text)) return false;
   if (/(?:^|[\s-])(?:cad|gcode|dfam)(?:[\s-]|$)|freecad|autocad|三维审查/.test(identity)
       && !cadArtifact(text)) return false;

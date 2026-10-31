@@ -49,7 +49,10 @@ test('runtime tools honor disabled servers and allowlists',()=>{
 test('specific read tools are suggested now; native arithmetic does not recruit tools',()=>{
  const result=advice('读取 GitHub 仓库 issue 详情');
  assert.equal(result.candidates.find(x=>x.name==='mcp__repo__get_issue')?.decision,'use-now');
- assert.equal(result.candidates.find(x=>x.name==='mcp__repo__send_message')?.decision,'defer');
+ // A request to read issue details supplies no write work. Inferred read-only
+ // scope now excludes messaging even when its metadata incorrectly claims read.
+ assert.equal(result.candidates.find(x=>x.name==='mcp__repo__send_message')?.decision,'skip');
+ assert.equal(advice('发送 GitHub 仓库 issue 消息').candidates.find(x=>x.name==='mcp__repo__send_message')?.decision,'check-scope');
  assert.equal(advice('计算 2+2').candidates.length,0);
  assert(result.candidates.every(x=>x.invocation.automaticallyExecuted===false));
 });

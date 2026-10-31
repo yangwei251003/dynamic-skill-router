@@ -1,5 +1,6 @@
 import {requestedName} from './request-entities.mjs';
 import {closedSuppliedTransformation} from './native-closure.mjs';
+import {positiveRequestPrefix,currentWorkClauses} from './task-restrictions.mjs';
 const list=x=>Array.isArray(x)?x:[];
 const clean=x=>String(x||'').trim();
 
@@ -146,7 +147,7 @@ function suppliedTextSubstitution(raw) {
   return false;
 }
 
-function suppliedChatOperation(raw, active) {
+function suppliedChatOperation(raw, active, allowText = true) {
   const textActions=[
     /翻译|译成|译为|\btranslate\b/i,
     /概括|总结|摘要|\b(?:summari[sz]e|summarise|condense)\b/i,
@@ -154,6 +155,7 @@ function suppliedChatOperation(raw, active) {
     new RegExp(REWRITE_ACTION.source+'|'+SUBSTITUTION_ACTION.source,'i'),
   ];
   const requested=textActions.map((pattern,index)=>pattern.test(active)?index:-1).filter(x=>x>=0);
+  if(!allowText&&requested.length)return false;
   if(requested.length>1)return false;
   if(requested.length===1){
     const quoted=[...raw.matchAll(/[“「『"]([^”」』"\n]{1,800})[”」』"]/g)];
@@ -243,16 +245,30 @@ function closedTextOperation(assessment) {
 
 export function useFastPath(assessment, options, recovery) {
   if(recovery.triggered||options.routingMode==='full')return false;
-  const closed=closedSuppliedTransformation(assessment.originalRequest||assessment.rawText||assessment.activeText);
+  // Reuse the source-bound witness produced by taskAssessment so scope and
+  // fast-path decisions cannot diverge through separate parsing limits.
+  const closed=assessment.suppliedOperation||closedSuppliedTransformation(assessment.originalRequest||assessment.rawText||assessment.activeText);
   // A complete grammar distinguishes supplied literals and a scoped no-lookup
   // constraint from instructions. It never mutates the source assessment.
-  const active=closed?.instructionText||assessment.activeText||'';
+  const active=closed?.instructionText||(assessment.activeClauses||[assessment.activeText||'']).map(positiveRequestPrefix).filter(Boolean).join('\n');
   if(/(?:查找|核实|注明|标注|给出|补充|提供).{0,25}(?:出处|来源|参考文献)|\b(?:find|verify|give|provide|cite)\b.{0,35}\b(?:source|provenance|reference)\b/i.test(active))return false;
   if(/\$[\w:-]+|app:\/\/|技能|插件|工具|手册|\b(?:mcp|plugins?|tools?|manuals?)\b|联网|网上|搜索|最新|\bsearch\b|\bbrowse\b/i.test(active))return false;
-  if(requestsNamedCapability(assessment,options))return false;
+  // The complete list grammar has already consumed its literal operands and
+  // every prohibition. Neither a quoted item nor a shared denied tool action
+  // is a capability request; real tool instructions cannot obtain this witness.
+  const capabilityRequest=['list-presentation','supplied-text-formatting'].includes(closed?.kind)
+    ?{...assessment,activeText:closed.instructionText,activeClauses:[closed.instructionText]}:assessment;
+  if(requestsNamedCapability(capabilityRequest,options))return false;
+  const currentWork=currentWorkClauses(active.split('\n'));
+  if(currentWork.some(clause=>/^(?:(?:请|先|再|然后|并且|并|帮我|直接)\s*)*(?:读取|读入|打开|扫描|访问|执行|运行|测试|发送|安装|删除|部署|发布)|^(?:please\s+)?(?:read|open|scan|access|execute|run|test|send|install|delete|deploy|publish)\b/i.test(clause)))return false;
+  // 仓库 also names supplied stock in a quantity word problem. Preserve the
+  // repository warning unless the existing bounded quantity grammar applies;
+  // real reads, tool requests and other external inputs still have their guards.
+  const quantityClosed=suppliedChatOperation(assessment.originalRequest||active,active,false);
+  if(/仓库/.test(active)&&!quantityClosed)return false;
   // These tasks need evidence or effects beyond the supplied text. This guard
   // also applies to host hints: they cannot erase an explicit external need.
-  if(/https?:\/\/|(?:[a-z]:[\\/]|\\\\)\S+|\b[\w-]+\.(?:csv|xlsx?|docx?|pdf|txt|json|png|jpe?g|mp4|tex|step|svg|py|js|mjs|sh|ps1)\b|附件|上传|下载|文件|目录|工程|仓库|数据库|浏览器|当前(?:网页|页面|界面)|今天|今日|实时|最新|联网|外部资料|参考资料|一手|文献|论文|新闻|天气|汇率|网址|链接|查找|查询|检索|查证|核实|药物|剂量|诊断|治疗|投资|股票|法律|税务|电路|原理图|\b(?:pcb|plc|attached|attachment|files?|folder|repository|database|browser|today|latest|sources?|literature|news|weather|verify|fetch|medical|dosage|diagnosis|treatment|investment|legal|tax|circuit|schematic)\b|\bcurrent\s+(?:price|version|news|weather|status|rates?)\b/i.test(active))return false;
+  if(/https?:\/\/|(?:[a-z]:[\\/]|\\\\)\S+|\b[\w-]+\.(?:csv|xlsx?|docx?|pdf|txt|json|png|jpe?g|mp4|tex|step|svg|py|js|mjs|sh|ps1)\b|附件|上传|下载|文件|目录|工程|数据库|浏览器|当前(?:网页|页面|界面)|今天|今日|实时|最新|联网|外部资料|参考资料|一手|文献|论文|新闻|天气|汇率|网址|链接|查找|查询|检索|查证|核实|药物|剂量|诊断|治疗|投资|股票|法律|税务|电路|原理图|\b(?:pcb|plc|attached|attachment|files?|folder|repository|database|browser|today|latest|sources?|literature|news|weather|verify|fetch|medical|dosage|diagnosis|treatment|investment|legal|tax|circuit|schematic)\b|\bcurrent\s+(?:price|version|news|weather|status|rates?)\b/i.test(active))return false;
   if(assessment.complexDevelopment||options.taskContext?.complexity==='high')return false;
   if(options.nativeSufficient===true||options.routingMode==='fast')return true;
   return assessment.selfContainedFunction===true||closed!==null||closedTextOperation(assessment);
