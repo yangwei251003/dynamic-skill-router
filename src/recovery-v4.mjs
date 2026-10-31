@@ -251,6 +251,10 @@ export function useFastPath(assessment, options, recovery) {
   // Reuse the source-bound witness produced by taskAssessment so scope and
   // fast-path decisions cannot diverge through separate parsing limits.
   const closed=assessment.suppliedOperation||closedSuppliedTransformation(assessment.originalRequest||assessment.rawText||assessment.activeText);
+  // Closed arithmetic/text fragments cannot consume a separately requested
+  // file output. Reuse the action-bound artifact roles, including bare format
+  // names, rather than guessing from a substring such as “result” or “3/4”.
+  if(!closed&&assessment.taskStructure?.artifacts?.some(item=>['output','verification','input'].includes(item.role)))return false;
   // A complete grammar distinguishes supplied literals and a scoped no-lookup
   // constraint from instructions. It never mutates the source assessment.
   const active=closed?.instructionText||(assessment.activeClauses||[assessment.activeText||'']).map(positiveRequestPrefix).filter(Boolean).join('\n');

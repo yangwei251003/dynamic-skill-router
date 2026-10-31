@@ -1,5 +1,7 @@
 # 路由咨询契约 V4
 
+`query` 仅传完整原始业务用户消息，不把系统/开发者说明、AGENTS、测试包装或执行控制拼接进去。原有宿主规则与范围限制仍生效：解释事实可放入 `taskContext`，当前执行限制可用 `invocationContext` 收紧。证据不足时不假填能力缺口；复杂任务已发现的具体缺口未被覆盖时，以同一 routeId 补充有来源的 `capabilityRequests`。宿主提供的 `toolNames` 不是用户点名，也不授权调用。
+
 V4 通过 `contractVersion: 4` 显式选择。`route_task` 接收完整用户原文 `query`、真实宿主 `host`、可选 `taskContext` 与当前可证实的运行时信息。宿主提供当前会话 Available skills 清单时，插件条目应以真实 `SKILL.md` 路径作为 `runtimeSkills: [{path, id?, provider?, enabled?}]` 输入。未提供时插件状态未核实；配置 enabled 与缓存不能证明当前启用，一次会话清单也不构成永久启用状态。`taskContext` 仅辅助解释当前事实，不能扩大授权。返回稳定 routeId、候选咨询卡、解释和适用能力信息；宿主负责最终的 `skip / consult / adapt / execute` 决策。路由不得写入日志或修改配置。
 
 后续 `search_skills` 使用同一 routeId，按阶段或具体缺口检索。不得以查询替代新的用户授权，也不得把它当作第二次初始路由。候选卡可以被跳过；实际应用前须完整读取相应技能与当前阶段要求的资料。原生能力与技能建议并列比较，只有后者能改善任务结果时才加载。

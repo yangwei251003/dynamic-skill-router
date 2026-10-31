@@ -232,6 +232,7 @@ function operation(entry, describedPurpose) {
   // The actual purpose may establish a mutation, but prose never establishes a
   // read-only guarantee and cannot override the high-impact checks above.
   if (/^(?:(?:generate|create|edit|modify|render|transform|convert|crop|resize|retouch|write|run|execute)\b|(?:生成|制作|编辑|修改|渲染|转换|运行))/i.test(purpose)
+      || /^Use\s+(?:this\s+)?[^.!?]{0,100}\btool for\b[^.!?]{0,180}\b(?:authoring|editing|generation|creation|modification)\b/i.test(purpose)
       || /\b(?:tool|function)\s+(?:enables|performs|supports)\b[^.!?。！？]{0,180}\b(?:generation|creation|editing|modification)\b/i.test(purpose))
     return {action:'change',phase:'implementation',effect:'write-or-unknown'};
   if (/\b(test|validate|verify|check|inspect|screenshot)\b/.test(name)) return {action:'verify',phase:'validation',effect:entry.annotations?.readOnlyHint === true?'read':'unknown'};
@@ -376,9 +377,23 @@ function taskSubstrateNeeds(assessment) {
     && list(assessment.taskStructure?.artifacts).some(item=>item.role==='input')
     && /(?:[a-z]:[\\/]|\.{1,2}[\\/])|\.(?:csv|json|txt|md|log|xlsx?|docx?|pptx?|pdf|parquet)\b/i.test(
       String(assessment.originalRequest||'').replace(/https?:\/\/[^\s<>"'，。；;]+/gi,''));
+  // An offline specialist project is not itself evidence that a shell can
+  // operate it. Bind generic execution to actual files/scripts/commands or a
+  // documented local bridge. The host may separately supply an evidenced gap.
+  // RUN may be a hardware state in a prohibition, not an execution verb.
+  // General execution needs an actual operation lead, not the bare token.
+  const runtimeAction=value=>/(?:^|[,;，；]|\b(?:and|then)\s+)\s*(?:(?:please|actually)\s+|请|先|再|然后|并且|并)*(?:run|execute)\b|运行|执行/i.test(value);
+  const executionObject=files||/命令|\bcommands?\b/i.test(positive)||runtimeAction(positive)
+    || list(assessment.taskStructure?.artifacts).length>0;
+  const localExecution=!explanationOnly&&!interfaceRead&&!remoteOnly&&!builtinDiagnostics&&!(specialist.databaseRead&&!specialist.localWork)
+    && (readOnlyLocalInput || bridge || local && executionObject && (execute || inspect || create&&!imageWork));
+  const localEvidence=localExecution?currentWorkClauses(clauses.map(positiveRequestText)).filter(value=>
+    runtimeAction(value)||/文件|目录|脚本|源码|报告|计算表|命令|\.(?:[a-z][a-z0-9]{1,5})\b|\b(?:files?|directories|scripts?|source code|report|command|bridge|local api)\b|本地接口/i.test(value)
+      && !/^(?:文件|资料|文本)(?:中|里)(?:若|如果|假如)/.test(value.trim())) : [];
   return {
     'public-web-access': publicWebNeed(assessment),
-    'local-execution': !explanationOnly&&!interfaceRead&&!remoteOnly&&!builtinDiagnostics&&!(specialist.databaseRead&&!specialist.localWork) && (readOnlyLocalInput || bridge || local && (execute || inspect&&files || create&&files&&!imageWork)),
+    'local-execution': localExecution,
+    localExecutionEvidence:localEvidence,
     'compilation-diagnostics': compilationDiagnostics,
     'document-runtime': !explanationOnly&&office&&(create||inspect||execute)&&!interfaceRead&&!remoteOnly,
     'image-observation': !explanationOnly&&localImage&&imageWork,
@@ -395,9 +410,45 @@ function taskSpecialistNeeds(assessment) {
   const browserValidation=!explanationOnly&&browserObject&&/试玩|截图|截屏|渲染|实际.{0,12}(?:检查|测试|验证|操作)|\b(?:test|verify|validate|playtest|screenshot|render|interact)\b/i.test(positive);
   const databaseRead=!explanationOnly&&/数据库|数据表|(?:指定|现有|项目|的).{0,50}表|\b(?:database|postgres(?:ql)?|sql|tables?|rows?)\b/i.test(positive)
     && /查询|聚合|分组计数|统计.{0,20}行数|\b(?:query|queries|aggregate|count|group by|read)\b/i.test(positive);
-  return {browserValidation,databaseRead,
+  return {browserValidation,databaseRead,recordRead:recordReadWitness(assessment),
     localBrowser:browserValidation&&/本地|离线|loopback|localhost|127\.0\.0\.1|file:\/\/|\b(?:local|offline)\b/i.test(positive),
     localWork:/本地|离线|文件|目录|脚本|\b(?:local|offline|filesystem|files?|directories|scripts?|source code)\b|\.(?:csv|json|sql|sqlite|db|py|js|html|xlsx?|docx?|pptx?|pdf|parquet)\b/i.test(positive)};
+}
+
+// A record operation is stronger evidence than a provider word or an isolated
+// “statistics” keyword. Preserve the source clauses; no query or identifier is
+// inferred and no material inside quoted reference text becomes an instruction.
+function recordReadWitness(assessment) {
+  const clauses=currentWorkClauses((list(assessment.activeClauses).length?assessment.activeClauses:[assessment.activeText||'']).map(positiveRequestText));
+  const active=clauses.join(' ');
+  if(/^(?:请\s*)?(?:解释|介绍|说明如何|如何|讲解|explain\b|describe\b|how\b)/i.test(active)
+    || /(?:只|仅)(?:给|提供|说明|写出).{0,12}(?:方法|思路|步骤|示例|SQL)|\b(?:only|just)\s+(?:explain|describe|provide\s+(?:a\s+)?(?:method|example))\b/i.test(active))return null;
+  const objects=clauses.filter(x=>/(?:[\p{Script=Han}]{1,10}(?:表|记录|明细))|\b(?:tables?|rows?|records?|entries)\b/u.test(x));
+  const operations=clauses.filter(x=>/统计|分组|计数|重复|去重|\b(?:aggregate|count|group\s+by|duplicate|deduplicate)\b/i.test(x));
+  const reads=clauses.filter(x=>/查看|读取|检查|查询|只读|\b(?:read|inspect|check|query)\b/i.test(x));
+  if(!objects.length||!operations.length||!reads.length)return null;
+  return {evidence:unique([...objects,...operations,...reads]),authority:'advisory-only'};
+}
+
+function recordReadCapability(entry,purpose,witness,providerMentioned,queryTerms) {
+  if(!witness||!providerMentioned||entry.kind!=='tool')return null;
+  const opening=primaryPurpose(purpose);
+  // Only a concrete retrieval contract can cross the bilingual term boundary.
+  // Mutating names/effects remain subject to operation() and capabilityGates().
+  if(!/^(?:Read|Retrieve|Fetch|Inspect|List|Find)\b/i.test(opening))return null;
+  if(['change','commit','communicate'].includes(operation(entry,purpose).action))return null;
+  const head=opening.split(/\bbefore\b/i)[0];
+  let role=null;
+  if(/\b(?:rows?|records?|entries)\b/i.test(head)&&/\b(?:table|database|collection|store)\b/i.test(opening))role='record-read';
+  else if(/\b(?:schema|tables?|structure)\b/i.test(head)&&/\b(?:database|collection|store)\b/i.test(opening))role='record-schema';
+  else if(/^List\b/i.test(opening)&&/\b(?:own|owned|accessible|account|workspace)\b/i.test(opening)
+    && terms(opening).some(term=>queryTerms.has(term)&&!GENERIC_SIGNALS.has(term)&&!PURPOSE_GENERIC.has(term)))role='record-resource-discovery';
+  if(!role)return null;
+  return {role,evidence:witness.evidence,
+    purpose:role==='record-read'?'读取用户要求统计或查重的实际记录；核实字段、范围与分页完整性':
+      role==='record-schema'?'先核对记录所在的真实表结构及标识符，不猜绑定或列名':
+      '仅在缺少已核实资源标识时定位用户指定的服务资源；有现成标识则复用',
+    scope:'discovery only; authentication, identifiers and complete pagination are unverified'};
 }
 
 // Containers may establish a concrete discovery gap, never a callable action
@@ -573,7 +624,7 @@ function positiveRequestText(value) {
 
 const FACET_ACTIONS = {
   read:/读取|查看|看一下|确认|提取|获取|检查|核实|核查|观察|检索|搜索|只搜|查找|比较|对照|回读|截图|截屏|\b(?:read|fetch|get|list|inspect|review|search|compare|check|observe|extract|verify|screenshot)\b/i,
-  create:/新建|另建|生成|制作|绘制|编写|写入|另写|新增|创建|保存|导出|复制|\b(?:create|generate|make|draw|render|write|build|save|export|copy|duplicate)\b/i,
+  create:/新建|另建|生成|制作|做成|做一(?:个|份|套|张|页)|绘制|编写|写入|另写|新增|创建|保存|导出|复制|\b(?:create|generate|make|draw|render|write|build|save|export|copy|duplicate)\b/i,
   modify:/修改|编辑|修图|重绘|抠图|调整|修复|更新|修正|转换|\b(?:edit|retouch|modify|adjust|fix|update|convert|transform|rename|move|import|upload)\b/i,
 };
 function facetLocation(value) {
@@ -582,9 +633,9 @@ function facetLocation(value) {
   return local&&!remote?'local':remote&&!local?'remote':'unspecified';
 }
 const RESOURCE_FAMILIES = [
-  ['spreadsheet',/\b(?:spreadsheet|worksheet|sheet|celldata)\b|电子表|在线表|单元格/],
-  ['document',/\b(?:document|paragraph|docx)\b|文档|段落/],
-  ['slides',/\b(?:slides?|presentation|powerpoint|pptx)\b|幻灯片|演示文稿/],
+  ['spreadsheet',/\b(?:spreadsheet|worksheet|sheet|celldata|excel|xlsx?)\b|电子表|在线表|单元格/],
+  ['document',/\b(?:document|paragraph|word|docx?)\b|文档|段落/],
+  ['slides',/\b(?:slides?|presentation|powerpoint|pptx?)\b|幻灯片|演示文稿/],
   ['image',/\b(?:image|photo|picture|illustration|portrait)\b|图片|图像|照片|插画/],
   ['video',/\b(?:video|movie|film)\b|视频|短片/],
 ];
@@ -860,7 +911,7 @@ export function adviseCapabilities(assessment, options = {}) {
   const queryTerms = new Set(terms(retrieval));
   const normalizedActive=label(requestEvidenceText(active));
   const providerKey=value=>label(String(value||'').split('@')[0]);
-  const namedProviders=new Set(inventory.capabilities.flatMap(e=>e.kind==='tool'?[declaredProvider(e)]:[e.name,e.displayName,e.plugin]).filter(x=>x&&providerKey(x).length>2&&(`-${normalizedActive}-`).includes(`-${providerKey(x)}-`)).map(providerKey));
+  const namedProviders=new Set(inventory.capabilities.flatMap(e=>e.kind==='tool'?[e.plugin,e.server,declaredProvider(e)]:[e.name,e.displayName,e.plugin]).filter(x=>x&&providerKey(x).length>2&&(`-${normalizedActive}-`).includes(`-${providerKey(x)}-`)).map(providerKey));
   const wantsSearch=/搜索|检索|查找|调研|\bsearch\b|\bfind\b|\bresearch\b/i.test(retrieval) || (queryTerms.has('research')&&queryTerms.has('search'));
   const wantsRead=wantsSearch||/读取|查看|检查|获取|观察|\bread\b|\bget\b|\binspect\b|\bobserve\b/i.test(retrieval);
   const localArtifact=/(?:本地|离线|单文件).{0,40}(?:文件|页|游戏)|\b(?:html|canvas)\b|浏览器.{0,20}游戏|\b(?:local|offline|single[- ]file)\b.{0,60}\b(?:files?|pages?|games?)\b/i.test(retrieval);
@@ -885,8 +936,9 @@ export function adviseCapabilities(assessment, options = {}) {
     const discovery=specialistDiscovery(entry,inventory,specialistNeeds,providerMentioned);
     const purpose=discovery?.purpose || purposes.get(entry.id);
     const network=discovery?.network || networkPurpose(purpose);
-    const role=entry.kind==='tool'?capabilityRole(purpose):discovery?.role || null;
-    const fillsSubstrate=Boolean(discovery || role&&substrateNeeds[role]
+    const recordRead=recordReadCapability(entry,purpose,specialistNeeds.recordRead,providerMentioned,queryTerms);
+    const role=recordRead?.role || (entry.kind==='tool'?capabilityRole(purpose):discovery?.role || null);
+    const fillsSubstrate=Boolean(recordRead || discovery || role&&substrateNeeds[role]
       && (role!=='compilation-diagnostics'||diagnosticCompilationObjectMatch(purpose,queryTerms)));
     const explicit=isExplicit(entry);
     if(['compilation-diagnostics','public-web-access'].includes(role)&&!explicit&&!fillsSubstrate)continue;
@@ -1024,14 +1076,18 @@ export function adviseCapabilities(assessment, options = {}) {
     score+=scoreAdjustment;
     cards.push({id:entry.id,kind:entry.kind,name:entry.name,plugin:entry.plugin || null,server:entry.server || null,
       description:purpose.slice(0,240),score,explicit,providerRequested:providerMentioned,matchedTerms:shared.slice(0,6),needMatches,
-      ...(fillsSubstrate?{capabilityRole:role,requirementSource:'user-request',requirementEvidence:OUTCOME[op.phase]}:{}),
+      ...(fillsSubstrate?{capabilityRole:role,requirementSource:'user-request',requirementEvidence:recordRead?.evidence || OUTCOME[op.phase]}:{}),
+      ...(recordRead?{recordReadEvidence:recordRead}:{}),
       ...(discovery?{discoveryEvidence:{sourceId:discovery.sourceId,purpose:discovery.purpose,scope:'functional-discovery-only; callability, authentication and effects unverified'}}:{}),
       availability:{discovered:true,enabled:entry.enabled,callable:entry.callable,evidence:entry.evidence,
         ...(entry.runtimeAvailable!==undefined?{runtimeAvailable:entry.runtimeAvailable,configurationEnabled:entry.configurationEnabled,configurationConflict:entry.configurationConflict}:{})},
       decision,phase:op.phase,when:networkForbidden&&network==='network'?'当前请求禁止联网，不能调用此联网能力':networkForbidden&&network==='unknown'?'先核对准确 schema 与输入，确认不会联网后再评估调用；确认前暂缓':scopedReadOnly && op.effect==='unknown' && entry.kind==='tool'?'先核对准确 schema 与输入，确认无写入效果后再评估调用；确认前暂缓':decision==='defer'?'仅到相应阶段且用户目标需要时再评估':decision==='discover-first'?'先按需发现工具或读取相关技能，确认当前会话可用':`当前 ${phase} 阶段，且缺少其能提供的结果时`,
       ...(networkForbidden?{networkScope:{forbidden:true,purposeEvidence:network}}:{}),
-      expectedBenefit:OUTCOME[op.phase] || OUTCOME[phase],effect:op.effect,gates,
+      expectedBenefit:recordRead?.purpose || (role==='local-execution'&&fillsSubstrate&&substrateNeeds.localExecutionEvidence.length
+        ? `核对本地执行入口以完成这些用户操作：${substrateNeeds.localExecutionEvidence.join('；')}`
+        :OUTCOME[op.phase] || OUTCOME[phase]),effect:op.effect,gates,
       objectBindings:binding.matches,scopeReadOnly:scopedReadOnly,
+      ...(role==='local-execution'&&fillsSubstrate?{operationEvidence:substrateNeeds.localExecutionEvidence.map(clause=>({source:'user-request',clause,scope:'advisory-only; exact command and effects require host verification'}))}:{}),
       ...(protectedScopes.length?{protectedScopes}:{}),
       invocation:{tool:entry.kind==='tool'?entry.name:null,argumentPolicy:'Use the host tool schema and actual task inputs; do not invent parameters.',executor:'host-agent',automaticallyExecuted:false},
       reason:explicit?'用户在当前任务中点名此能力':fillsSubstrate?`任务需要 ${role}，该工具的具体用途可补足此缺口；输入及效果仍须核对`:`任务与能力共有具体信号：${shared.slice(0,4).join('、')}`});

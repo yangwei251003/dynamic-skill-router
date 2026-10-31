@@ -30,7 +30,14 @@ export function taskStructure(text) {
   const artifacts=[];
   const needsCreation=clauses.some(x=>creationAction.test(x)||modificationAction.test(x));
   const intentClauses=clauses.map((clause,index)=>{
-    const formats=[...clause.matchAll(new RegExp('[.]('+FORMATS+')(?=$|[^a-z0-9_])','gi'))].map(m=>m[1].toLowerCase());
+    // A delivery format need not be a filename: “export PPTX” and “export
+    // deck.pptx” have the same output role. Word boundaries avoid identifiers
+    // such as jsonParser. Bare formats require an operation in this clause;
+    // mentioning a format in an explanation is not an artifact request.
+    const formatPattern=(creationAction.test(clause)||modificationAction.test(clause)||delivery.test(clause)||observes.test(clause))
+      ? '(?<![a-z0-9_])(?:[.])?('+FORMATS+')(?=$|[^a-z0-9_])'
+      : '[.]('+FORMATS+')(?=$|[^a-z0-9_])';
+    const formats=[...clause.matchAll(new RegExp(formatPattern,'gi'))].map(m=>m[1].toLowerCase());
     const isPreview=preview.test(clause)&&!imageAction.test(clause);
     for(const format of new Set(formats)) {
       const raster=/^(?:png|jpe?g|webp|gif|bmp|tiff?)$/.test(format);
