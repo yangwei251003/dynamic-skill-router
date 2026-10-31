@@ -63,13 +63,16 @@ test('missing inputs, unknown quantities, mixed tasks and external effects retai
 });
 
 test('fresh-process import and routing perform no directory discovery for supplied-only operations',()=>{
- const url=pathToFileURL(resolve('src/advisor-v4.mjs')).href,pids=new Set();
+ const url=pathToFileURL(resolve('src/advisor-v4.mjs')).href,bootIds=new Set();
  for(const query of queries){
-  const script=`import fs from 'node:fs';import fsp from 'node:fs/promises';const counts={sync:0,callback:0,promise:0};for(const [o,k,n] of [[fs,'readdirSync','sync'],[fs,'readdir','callback'],[fsp,'readdir','promise']]){const f=o[k];o[k]=function(...a){counts[n]++;return f.apply(this,a)}}fs.readdirSync('.');if(counts.sync!==1)throw Error('inactive counter');counts.sync=0;const {routeTaskV4}=await import(${JSON.stringify(url)});const r=routeTaskV4(${JSON.stringify(query)},{host:'codex',contractVersion:4});console.log(JSON.stringify({pid:process.pid,counts,mode:r.performance.mode,cards:r.consultCandidates.length+r.capabilityCandidates.length}));`;
+  const script=`import fs from 'node:fs';import fsp from 'node:fs/promises';import {randomUUID} from 'node:crypto';const bootId=randomUUID();const counts={sync:0,callback:0,promise:0};for(const [o,k,n] of [[fs,'readdirSync','sync'],[fs,'readdir','callback'],[fsp,'readdir','promise']]){const f=o[k];o[k]=function(...a){counts[n]++;return f.apply(this,a)}}fs.readdirSync('.');if(counts.sync!==1)throw Error('inactive counter');counts.sync=0;const {routeTaskV4}=await import(${JSON.stringify(url)});const r=routeTaskV4(${JSON.stringify(query)},{host:'codex',contractVersion:4});console.log(JSON.stringify({pid:process.pid,bootId,counts,mode:r.performance.mode,cards:r.consultCandidates.length+r.capabilityCandidates.length}));`;
   const run=spawnSync(process.execPath,['--input-type=module','-e',script],{encoding:'utf8',timeout:15000,windowsHide:true});
   assert.equal(run.status,0,run.stderr||run.stdout);const r=JSON.parse(run.stdout.trim());
-  assert.equal(r.mode,'fast',query);assert.equal(r.cards,0,query);assert.deepEqual(r.counts,{sync:0,callback:0,promise:0},query);pids.add(r.pid);
+  assert.equal(r.mode,'fast',query);assert.equal(r.cards,0,query);assert.deepEqual(r.counts,{sync:0,callback:0,promise:0},query);
+  assert.equal(r.pid,run.pid);assert.notEqual(r.pid,process.pid);bootIds.add(r.bootId);
   console.log(JSON.stringify({query,...r,scope:'patched public Node readdir APIs, not all OS I/O'}));
  }
- assert.equal(pids.size,queries.length);
+ // Sequential exited processes can reuse a Windows PID. Verify each fresh
+ // child and its boot identity without requiring globally unique OS PIDs.
+ assert.equal(bootIds.size,queries.length);
 });
