@@ -15,6 +15,14 @@ test('expired and future dated records stay out of calibration',()=>{
   assert.equal(run(rows.map(r=>({...r,observedAt:'2020-01-01'}))).size,0);
   assert.equal(run(rows.map(r=>({...r,observedAt:'2027-01-01'}))).size,0);
 });
+
+test('undated history stays auditable without becoming timeless calibration',()=>{
+ const undated=rows.map(({observedAt,...row})=>row);
+ assert(undated.every(row=>validateOutcomeV4(row).ok));
+ assert.equal(run(undated).size,0);
+ assert.equal(run(undated.map(row=>({...row,timestamp:'not a date'}))).size,0);
+ assert(run(undated.map(row=>({...row,timestamp:'2026-10-28T00:00:00Z'}))).get('fixture').adjustment>0);
+});
 test('revocations remove the observation regardless of event order',()=>{
   const revoked=rows.map(r=>({...r,revoked:true}));
   assert.equal(run([...revoked,...rows]).size,0);

@@ -1,12 +1,12 @@
 # 其他宿主的只读共享核心适配
 
-共享核心：<USER_HOME>/DeskBox/我的桌面/我的资源库/Assets/全局技能/动态技能路由器
-Node：C:/Program Files/nodejs/node.exe（先核实存在）
+共享核心：<ROUTER_ROOT>（本机克隆目录的绝对路径）
+Node：node（先核实可执行路径和版本，要求22或更高）
 MCP 入口：共享核心/src/mcp-server.mjs；CLI 后备：共享核心/src/cli.mjs。
 
 复用核心功能与复制 Codex 插件包是两回事。支持 stdio MCP 的宿主可以接同一入口；插件市场、规则位置和工具发现机制由宿主自己的适配层实现，不假设能原样安装 Codex 插件。
 
-2026-09-25 只读配置检查发现以下路径均包含 dynamic_skill_router 且指向共享核心：
+以下仅列出常见配置位置示例；应按对应宿主当前文档与实际安装核实，不能当作本机发现结果：
 - WorkBuddy：~/.workbuddy/mcp.json
 - Antigravity：~/.gemini/antigravity/mcp_config.json
 - Gemini：~/.gemini/settings.json

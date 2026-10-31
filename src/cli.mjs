@@ -8,6 +8,7 @@ import { discoverSkills, resolveDiscoveredSkill, refreshIndex } from './discover
 import { loadRegistry, validateRegistry } from './registry.mjs';
 import { ROUTER_VERSION } from './version.mjs';
 import { planWorkItems } from './work-planner.mjs';
+import { canonicalHost } from './host-manifest.mjs';
 
 const [command = 'help', ...args] = process.argv.slice(2);
 const output = value => process.stdout.write(typeof value === 'string' ? value+'\n' : JSON.stringify(value,null,2)+'\n');
@@ -40,6 +41,8 @@ try {
   }else if(['route','plan','search','resolve','list','health','coverage','refresh-index','capabilities','search-capabilities','recover'].includes(command)){
     const parsed=parse(args); let {query,options}=parsed;
     if(parsed.jsonInput){const envelope=JSON.parse(fs.readFileSync(0,'utf8'));query=envelope.query||query;options={...envelope.options,...options};}
+    // Match hook host identity so aliases reuse the same persisted discovery index.
+    if(options.host!=null) options.host=canonicalHost(options.host);
     if(command==='recover'){
       query||=fs.readFileSync(0,'utf8').trim();if(!options.routeId)throw new Error('recover requires --route-id');
       output({routeId:options.routeId,...planRecovery({...taskAssessment(query,options.taskContext,options.invocationContext),rawText:query},options)});

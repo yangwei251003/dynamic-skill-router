@@ -39,7 +39,7 @@ assert.equal(compact.consultCandidates[0].contentHash,'db-v1');
 assert.equal(compact.consultCandidates[0].detailsAvailable,true);
 
 const decision = {skillId:'db-manual',contentHash:'db-v1',mode:'adapt',shown:true,read:true,adopted:true,outcome:'helpful',evidence:[{kind:'validation',reference:'focused-test',passed:true}]};
-const entry = {contractVersion:4,routeId:'one-task',host:'codex',taskType:'development',decisions:[decision]};
+const entry = {contractVersion:4,routeId:'one-task',host:'codex',taskType:'development',timestamp:new Date().toISOString(),decisions:[decision]};
 const ctx = {host:'codex', taskType:'development', mode:'adapt'};
 const repeated = computeFeedbackCalibrationV4(Array.from({length:12},()=>entry),ctx).get('db-manual');
 assert.equal(repeated.samples,1); assert.equal(repeated.adjustment,0);

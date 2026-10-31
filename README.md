@@ -1,8 +1,10 @@
 # Dynamic Skill Router
 
-已补充[RC7独立路由评测](docs/v43-rc7-status.md)及[33次真实成果对照](docs/v43-rc7-artifacts.md)：仍未达到完整发布门槛。RC8代码回归通过，独立验收待完成。本公开分支可运行代码仍为下述rc.1，记录更新不是代码切换。
+本分支归档 **4.3.0-rc.10 可移植候选源码**，仍属评测候选草稿。RC10 最终路由契约为 **FAIL**，完整发布为 **NOT_READY**；生产仍为 **4.2.0**。公开归档不切换生产算法，也不安装宿主规则。
 
-> 本分支为 **4.3.0-rc.1 评测候选**，未替换现用 4.2.0 路由算法。开发集和代码回归有改善，但独立保留集仍出现必要能力召回退化，完整发布门槛未满足。稳定用户偏好与按需方法资料已在本机独立生效。请先阅读 [评测结果与生效范围](docs/v43-evaluation.md) 和 [三组真实成果对照](docs/v43-artifact-evaluation.md)。
+新 19 题已完成：专业题 **9/12**、原生题 **3/3**、边界题 **1/4** 通过。原 36 题已知回归为 **33/36**，技能无关率相对降低 **25.71%**，未达到 50% 门槛；真实成果整体提升至少 5 分仍未证明。完整口径和缺口见 [RC10 最终状态](docs/v43-rc10-status.md)，源码与本地代码验证见 [归档范围](docs/v43-rc10-archive.md)。
+
+此前的 [RC7 独立路由评测](docs/v43-rc7-status.md)、[33 次真实成果对照](docs/v43-rc7-artifacts.md)及[早期评测](docs/v43-evaluation.md)保留为历史记录，不能替代 RC10 的完整发布证据。
 
 面向 AI 编程工具的本地技能与能力路由器。面对一个任务，它先区分当前请求、未来想法和明确限制，再把相关 Skill、插件或 MCP 工具整理成咨询卡，供宿主决定是否查阅或采用。
 
@@ -27,7 +29,7 @@ Node.js **22+**、ES modules；锁定依赖 `@modelcontextprotocol/server`、`sm
 ## 快速上手
 
 ```powershell
-git clone https://github.com/yangwei251003/dynamic-skill-router.git
+git clone --branch codex/router-v43-evaluation --single-branch https://github.com/yangwei251003/dynamic-skill-router.git
 cd dynamic-skill-router
 npm ci --ignore-scripts
 npm run health
@@ -79,13 +81,16 @@ docs/                 结构示意、配置和验证范围
 
 ```powershell
 npm test
+npm run test:v43
 ```
 
-测试同样使用路由器专用的临时目录。当前候选公开副本在 Windows 的既有回归为 **41 项通过，0 失败**；新增 `npm run test:v43` 为 **61 项通过，0 失败**，包含任务语境、方法选择、只读效果、反馈时效和并发规则保护。`npm run demo` 实际返回 `ok: true`。这些检查不替代独立保留集或最终成果对照。
+测试同样使用路由器专用的临时目录。RC10 公开副本在 Windows / Node.js v24.15.0 的既有回归为 **41 项通过，0 失败**；`npm run test:v43` 的 35 个文件共 **313 项通过，0 失败**。`health`、`list` 与 `demo` 均成功，示例路由命中 `example-code-review`。测试使用本机已安装的锁定依赖；本轮未重新安装依赖，也未运行远端 CI。这些检查不替代独立保留集、全部宿主接入或最终成果对照。
 
 ## 4.3 候选改动
 
 - 保留原始请求；区分引用、宿主解释与执行限制。新增验收条件、能力缺口和证据引用字段。
+- 按请求动作、输入与输出对象、工具主要用途判断建议；支持同一服务中的读取与写入区分，显式禁网约束单独保留。
+- 完整给定材料的简单聊天操作可直接采用原生路径；额外文件、外部动作、点名能力和恢复需求仍需单独判断。
 - 中文整词匹配、适用领域与明确排除条件约束；保留显式点名及 V3 接口。
 - [十二方法与八类补充机制](skill/dynamic-skill-router/references/task-methods.md) 按缺口建议 0–2 张卡，允许完全不用，不增加固定问卷或角色数量。
 - 质量档位影响建议阅读与验证深度，不承诺产物质量；[研究依据](references/research-evidence.md) 保留结论边界。

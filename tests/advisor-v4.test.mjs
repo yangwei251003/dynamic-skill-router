@@ -80,7 +80,7 @@ const decision = (outcome, evidence = [{kind: 'validation', reference: 'focused 
   skillId: 'skill-stocktake', contentHash: 'hash-stock', mode: 'adapt', shown: true, read: true, adopted: true, outcome, evidence,
 });
 let taskSequence = 0;
-const entry = (outcome, evidence) => ({routeId: `test-task-${++taskSequence}`, contractVersion: 4, taskType: 'complex', host: 'codex', decisions: [decision(outcome, evidence)]});
+const entry = (outcome, evidence) => ({routeId: `test-task-${++taskSequence}`, contractVersion: 4, taskType: 'complex', host: 'codex', timestamp:new Date().toISOString(), decisions: [decision(outcome, evidence)]});
 assert.equal(validateOutcomeV4(entry('helpful')).ok, true);
 assert.equal(validateOutcomeV4({contractVersion: 4, decisions: []}).ok, false);
 const positive = computeFeedbackCalibrationV4(Array.from({length: 12}, () => entry('helpful')), {host: 'codex', taskType: 'complex', mode: 'adapt', contentHashes: {'skill-stocktake': 'hash-stock'}});

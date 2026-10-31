@@ -69,7 +69,9 @@ export function computeFeedbackCalibrationV4(entries, context = {}, policy = {})
     if (context.modelId && entry.modelId !== context.modelId) continue;
     if (entry.revoked === true) continue;
     const observed = Date.parse(entry.observedAt || entry.timestamp || '');
-    if (Number.isFinite(observed) && (observed > now + 300000 || now - observed > maxAgeMs)) continue;
+    // Undated legacy records remain readable audit history, but cannot be
+    // assumed current forever. MCP-written records already have a timestamp.
+    if (!Number.isFinite(observed) || observed > now + 300000 || now - observed > maxAgeMs) continue;
     for (const decision of entry.decisions) {
       if (revoked.has(identity(entry,decision))) continue;
       if (!decision.shown || !decision.read || !decision.adopted || decision.mode === 'skip') continue;

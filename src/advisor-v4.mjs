@@ -1,11 +1,16 @@
+import {semanticTaskText,taskStructure} from './task-structure.mjs';
 import {randomUUID} from 'node:crypto';
 import {discoverSkills} from './discovery-v4.mjs';
 import {readFeedbackV4} from './feedback-v4.mjs';
-import {inferCapability, inferSkillStage, skillDomainCompatible, capabilityActionCompatible} from './skill-staging.mjs';
+import {inferCapability, inferSkillStage, skillDomainCompatible, capabilityActionCompatible, capabilityDirectlyRequested} from './skill-staging.mjs';
 import {adviseCapabilities} from './capabilities-v4.mjs';
 import {planRecovery, useFastPath} from './recovery-v4.mjs';
 import {taskText} from './task-input.mjs';
 import {adviseTaskMethods} from './task-methods-v4.mjs';
+import {assessRestrictions} from './task-restrictions.mjs';
+import {closedSuppliedProse} from './supplied-prose.mjs';
+import {requestedName,unquoteRequestedNames} from './request-entities.mjs';
+import {webImplementation,evidenceResearch,cadArtifact,latexArtifact,mcpImplementation,imageArtifact,structuredDataOperation,accessibilityNeed,manualNeedKeys,backendImplementation,designToCode,wordDocumentArtifact,desktopObservation,skillAuthoring,publicInformationSearch,businessAnalysis,experimentWork,experimentDesign,electricalDesign,databaseMigration,electricalInspection,wordDocumentInspection,numericalComputation,optionComparison,gameImplementation,sourceCodeReview,latexSourceRepair} from './task-intents.mjs';
 
 const norm = (value) => String(value || '').normalize('NFKC').toLowerCase();
 const list = (value) => Array.isArray(value) ? value : [];
@@ -15,7 +20,9 @@ const STEM = new Map(Object.entries({diagnostic:'debug',diagnostics:'debug',diag
 function token(value) {
   const normalized = norm(value).replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
   if (!normalized || STOP.has(normalized)) return '';
-  return STEM.get(normalized) || normalized.replace(/(ies|ing|ed|s)$/i, (ending) => ending === 'ies' ? 'y' : '');
+  const morphological={experimental:'experiment',experimentation:'experiment',randomization:'random',randomisation:'random',randomizing:'random',randomising:'random',randomized:'random',randomised:'random',accessible:'accessibility',analyses:'analysis',analysis:'analysis',status:'status',process:'process',access:'access',business:'business',css:'css',canvas:'canvas',canvases:'canvas'};
+  if (normalized === 'postgresql' || normalized === 'postgres') return 'postgres';
+  return morphological[normalized] || STEM.get(normalized) || normalized.replace(/(ies|ing|ed|s)$/i, (ending) => ending === 'ies' ? 'y' : '');
 }
 const legacyWords = (value) => {
   const text = norm(value);
@@ -35,7 +42,7 @@ const wordCache = new Map();
 const words = (value) => {
   const text = norm(value);
   if (wordCache.has(text)) return wordCache.get(text);
-  const latin = (text.match(/[a-z][a-z0-9]{1,}/g) || []).map(token);
+  const latin = [...(text.match(/[a-z][a-z0-9]{1,}/g) || []),...(text.match(/[a-z][a-z0-9]+(?:\.[a-z0-9]+)+/g)||[]).map(term=>term.replaceAll('.',''))].map(token);
   const han = [...segmenter.segment(text)].filter(part => part.isWordLike && /\p{Script=Han}/u.test(part.segment))
     .map(part => part.segment).filter(part => part.length >= 2 && !HAN_STOP.has(part));
   const result = unique([...latin, ...han].filter(item => item.length >= 2 && !STOP.has(item)));
@@ -57,17 +64,38 @@ function retrievalTerms(text, experimental = false, legacy = false) {
     [/幻灯片|演示文稿|课件|PPT/gi, ['presentation', 'slides']],
     [/表格|电子表|Excel/gi, ['spreadsheet']],
     [/论文|文献/gu, ['academic']],
+    [/竞品|竞争对手|市场规模|商业可行性|market sizing|competitor/gi, ['market','competitor']],
     [/电路|原理图|PCB/gi, ['circuit', 'schematic']],
     [/技能路由|路由器/gu, ['router']],
     [/视频|剪辑|动效/gu, ['video']],
     [/提示词/gu, ['prompt']],
     [/故障排查|排查故障|调试|诊断/gu, ['debug']],
+    [/实验|试验/gu,['experiment']],
+    [/随机(?:化|分组)|randomization|randomisation/gi,['random']],
+    [/分区|区组|blocking/gi,['blocking']],
+    [/无障碍|可访问|键盘导航|读屏/gu,['accessibility']],
+    [/润色|校对|proofread|polish/gi,['polish']],
+    [/后端|服务器|服务端|\b(?:node\.?js|express|fastapi|django|flask|http)\b.{0,30}(?:服务|接口|service|api)|(?:服务|接口|service|api).{0,30}\b(?:node\.?js|express|fastapi|django|flask|http)\b/gi,['backend','api']],
+    [/原理图|电路板|嘉立创|EDA/gi,['schematic','pcb']],
+    [/\.tex\b|\btex\b|\b(?:pdf|xe|lua)?latex\b|\blatexmk\b|\btectonic\b|\bfontspec\b/gi,['latex']],
+    [/键盘.{0,35}(?:控制|操作|移到|移动|焦点|按钮|导航)|keyboard.{0,25}(?:control|operat|navigat|focus)/gi,['accessibility']],
+    [/(?:未解析|未定义|重复).{0,12}(?:引用|label|reference)|(?:引用|label|reference).{0,12}(?:未解析|未定义|重复)/gi,['reference','debug']],
     [/rename.{0,60}(?:column|field)|(?:column|field).{0,60}rename|schema change|mixed.{0,50}deployment/i, ['schema', 'migration']],
     [/diagnostic|diagnos|troubleshoot|investigat|incident|outage|requests slow|connections increased/i, ['debug']],
     [/real goal|minimal useful|which features|additional features|product direction|product scope|requirements/i, ['product', 'direction', 'why']],
     [/lost updates|lose updates|concurrent requests|shared db|atomicity/i, ['concurrency', 'transaction']],
   ];
   const inferred = [];
+  if(!legacy){
+    for(const [matched,additions,evidence] of [[sourceCodeReview(text),['code','review'],'source code review action/object'],[latexSourceRepair(text),['latex','repair'],'LaTeX source repair action/object']])
+      if(matched)for(const term of additions){terms.add(term);inferred.push({term,evidence});}
+    for(const [matched,additions,evidence] of [[webImplementation(text),['frontend','website'],'web implementation action/object'],[evidenceResearch(text),['research','search'],'evidence research action/object'],[cadArtifact(text),['cad'],'CAD artifact object']])
+      if(matched)for(const term of additions){terms.add(term);inferred.push({term,evidence});}
+    for(const [matched,additions,evidence] of [[mcpImplementation(text),['mcp','server','validation'],'MCP implementation action/object'],[imageArtifact(text),['image','edit'],'raster image action/object'],[structuredDataOperation(text),['analysis','validation','数据分析'],'structured data operation']])
+      if(matched)for(const term of additions){terms.add(term);inferred.push({term,evidence});}
+    for(const [matched,additions,evidence] of [[numericalComputation(text),['numerical','scientific','数学建模'],'numerical computation action/object'],[optionComparison(text),['decision','consulting'],'option comparison action/object'],[gameImplementation(text),['game'],'game implementation action/object'],[backendImplementation(text),['backend','api'],'backend implementation action/object'],[wordDocumentArtifact(text),['word','docx'],'editable Word document artifact'],[desktopObservation(text),['desktop','电脑','界面'],'existing desktop observation']])
+      if(matched)for(const term of additions){terms.add(term);inferred.push({term,evidence});}
+  }
   for (const [pattern, additions] of bridges) {
     const match = pattern.exec(text);
     if (match && (!legacy || experimental || !/\p{Script=Han}/u.test(match[0]))) for (const term of additions) { terms.add(term); inferred.push({term, evidence: match[0]}); }
@@ -75,7 +103,7 @@ function retrievalTerms(text, experimental = false, legacy = false) {
   return {terms, inferred};
 }
 
-function retrievalIndex(skills, activeText, experimental = false, legacy = false) {
+export function retrievalIndex(skills, activeText, experimental = false, legacy = false) {
   const {terms, inferred} = retrievalTerms(activeText, experimental, legacy);
   const documents = skills.map((skill) => {
     const identity = [skill.id, skill.nameZh, skill.name, ...list(skill.aliases)].join(' ');
@@ -95,30 +123,48 @@ function queryClauses(query) {
   // Host plugin mentions are explicit names; preserve their surrounding clause
   // so quoted, future and negative uses still go through the scope filters.
   const mentions = taskText(raw.replace(/\[\$([\w.:-]+)\]\(app:\/\/[^\s)]+\)/g, ' $$$1 '));
+  // Reported instructions remain source material even when they quote only a
+  // skill identifier. Strip reporting clauses before unquoting direct requests.
+  const reported = mentions
+    .replace(/(?:^|[。，,；;\n])\s*(?:参考资料|参考文档|(?:产品|用户|设备|技术|操作|项目|参考|样例|示例)?手册|网页(?:上|中|里)?|页面(?:上|中|里)?|文章(?:中|里)?|文档(?:中|里)?|日志(?:中|内|里)?)(?:说|写着|写道|提到|指出|要求|建议|记录|描述|[：:])[^。；;\n]*(?=[。；;\n]|$)/g,' ')
+    .replace(/(?:^|[.,;\n])\s*(?:the\s+)?(?:readme|document|article|manual|webpage|log|reference|source)\s+(?:says?|states?|instructs?|recommends?|reads?)\s*:?(?:\s+|(?=[^a-z]))[^.;\n]*(?=[.;\n]|$)/gi,' ');
   // Only unquote an identifier directly governed by a use verb. Quoted examples
   // and arbitrary code remain excluded; later clause checks still reject negation.
-  const namedQuotes = mentions.replace(/((?:使用|调用|启用|采用|用|\bapply|\buse|\binvoke)\s*)[“"「『`]([$\p{L}\p{N}_.:-]+)[”"」』`]/giu, '$1$2');
+  const namedQuotes = unquoteRequestedNames(reported);
   const withoutCode = namedQuotes.replace(/```[\s\S]*?```/g, ' ').replace(/`([^`]+)`/g, (_, inner) => /^\$[\p{L}\p{N}_.:-]+$/u.test(inner.trim()) ? inner.trim() : ' ');
   const sourceFiltered = withoutCode.replace(/(?:^|[。；;\n])\s*(?:参考资料|参考文档|网页上的|页面上的|文章中|文章里|文档中|文档里)[^。；;\n]*[“‘"][^。；;\n]*(?=[。；;\n]|$)/g,' ');
   const withoutQuotes = sourceFiltered.replace(/[“"「『][^”"」』\n]*[”"」』]/g, ' ')
     .replace(/‘[^’\n]*’|【[^】\n]*】/g, ' ')
     .replace(/(^|[\s:：])'[^'\n]+'(?=\s|[.,，。;；]|$)/g, ' ')
     .replace(/^\s*>.*$/gm, ' ');
-  const clauses = withoutQuotes.split(/[。！？!?;；，,\n]+/).map((value) => value.trim()).filter(Boolean);
-  const isFuture = (value) => /以后|将来|未来|后续|下一步|届时|日后|计划(?:再|之后)|eventually|later|future|subsequently/i.test(value);
-  const isNegative = (value) => /不要|不得|禁止|别用|无需|不需要|避免|do not|don't|never|without/i.test(value);
+  const clauses = withoutQuotes.split(/[。！？!?;；，,\n]+|而(?:是|要)|但是|但(?=请|要|需|改为|可以)|\bbut\b|\binstead\b/i).map((value) => value.trim()).filter(Boolean);
+  const futurePattern=/以后|将来|未来|后续|下一步|届时|日后|计划(?:再|之后)|(?:等|待)(?:我|用户|客户|审批|确认|授权).{0,20}(?:确认|批准|授权|同意|后)|(?:确认|批准|授权)后|\bafter\s+(?:approval|confirmation|I\s+(?:approve|confirm))|\bonce\s+(?:approved|confirmed|I\s+(?:approve|confirm))|eventually|later|future|subsequently/i;
+  const isFuture = (value) => futurePattern.test(value);
+  const negativePattern=/不要|不得|禁止|不允许|不准|不能|不可|别用|不用|不使用|不调用|不启用|不采用|不(?:替我|帮我|公开|线上|在线)?(?:做|进行|制作|生成|编写|修改|重绘|导出|发布|写|新建|创建|提交|上传|下载|启动|发送|报名|执行|访问|运行|安装|连接|部署|注册|联系)|没有(?:线上|在线)?(?:发布|部署|上传)需求|无需|不需要|避免|do not|don't|must not|may not|cannot|can't|should not|shouldn't|never|without/i;
+  const isNegative = (value) => negativePattern.test(value);
   const active = clauses.flatMap((value) => {
-    const usable = value.split(/(?:例如|比如|举例|示例|for example|e\.g\.)/i)[0];
+    if(/^(?:并)?(?:不是|并非|而非)|^(?:not\b|rather than\b)/i.test(value))return [];
+    const source = value.split(/(?:例如|比如|举例|示例|for example|e\.g\.)/i)[0];
+    // A negative attribute qualifies the requested object. It does not cancel
+    // the governing action: "create a page that needs no server" is still a page.
+    // Keep the untouched clause in constraintText for permission assessment.
+    const usable = source.replace(/(?:无需|无须|不需要|不用)[^，。；;\n]{1,40}?的/g,(modifier,offset)=>{
+      const before=source.slice(0,offset);
+      return /(?:做|制作|开发|创建|设计|实现|编写|写|交付|导出|生成|画|搭建|给我|研究|了解|比较|评估|检查|核对|一个|一份|一种|一套)[^，。；;\n]{0,30}$/.test(before)?'':modifier;
+    });
     // A future time horizon inside a request to produce a plan is current work.
     const currentPlan = /^(?:(?:请你?|现在|本次|帮我|麻烦)\s*)*(?:(?:为|针对)未来.{0,25}(?:制定|编写|设计|准备)|(?:制定|编写|设计|准备)).*(?:计划|方案)/.test(usable)
       || /^(?:please\s+)?(?:write|create|prepare|design)\b.*\bplan\b/i.test(usable);
     const planning = currentPlan ? usable.replace(/(?:未来|后续)(?=.{0,35}(?:计划|方案))/g, '').replace(/\bfuture\b/gi, '') : usable;
-    const beforeFuture = planning.split(/(?:以后|将来|未来|后续|下一步|届时|日后|eventually|later|future|subsequently)/i)[0];
-    const beforeNegative = beforeFuture.split(/(?:不要|不得|禁止|别用|无需|不需要|避免|do not|don't|never|without)/i)[0];
+    const beforeFuture = planning.split(futurePattern)[0];
+    const beforeNegative = beforeFuture.split(negativePattern)[0];
     return beforeNegative.trim() && !isNegative(beforeNegative) ? [beforeNegative.trim()] : [];
   });
   const constraintText = clauses.map(value => value.split(/(?:例如|比如|举例|示例|for example|e\.g\.)/i)[0]).join('\n');
-  return {active, future: clauses.filter(isFuture), negative: clauses.filter(isNegative), raw, constraintText};
+  // Preserve sentence boundaries for scoped restrictions: a comma may continue
+  // a protected object, whereas a new sentence can state a global prohibition.
+  const restrictionText=withoutQuotes.replace(/(?:例如|比如|举例|示例|for example|e\.g\.)[^。！？!?;；，,\n]*/gi,'');
+  return {active, future: clauses.filter(isFuture), negative: clauses.filter(isNegative), raw, constraintText, restrictionText};
 }
 
 function lexicalScore(haystack, needle) {
@@ -150,12 +196,18 @@ function independentHits(hits, active) {
 }
 
 export function taskAssessment(query, taskContext = {}, invocationContext = {}) {
-  const clauses = queryClauses(query);
-  const activeText = clauses.active.join(' ');
+  const parsedClauses = queryClauses(query);
+  const suppliedOperation = closedSuppliedProse(taskText(query));
+  // Only a complete input-closed grammar may remove data from retrieval. The
+  // original request and actual restrictions remain available for host review.
+  const clauses = suppliedOperation ? {...parsedClauses,active:[suppliedOperation.instructionText]} : parsedClauses;
+  const activeText = clauses.active.join('\n');
+  const structure = taskStructure(activeText);
   const strings = values => unique(list(values).filter(value => typeof value === 'string' && value.trim()).map(value => value.trim()));
   const statedActions = strings(taskContext.actions);
   const statedDeliverables = strings(taskContext.deliverables);
   const development = /开发|实现|修复|重构|迁移|集成|升级|编写代码|build|implement|develop|fix|refactor|migrat/i.test(activeText)
+    || webImplementation(activeText)
     || /(?:做|制作|搭建|创建).{0,25}(?:网页|网站|应用|系统|游戏|软件|程序|插件)/i.test(activeText);
   const selfContainedFunction = /^\s*(?:export|implement|write)\s+(?:an?\s+)?(?:async\s+)?[a-z_$][\w$]*\s*\(/i.test(activeText)
     && !/repository|database|deployment|production|security audit|cross.module|existing system/i.test(activeText);
@@ -175,15 +227,14 @@ export function taskAssessment(query, taskContext = {}, invocationContext = {}) 
     : development ? 'development'
       : /研究|调研|论文|文献|research/i.test(activeText) ? 'research'
         : /分析|统计|数据|analys/i.test(activeText) ? 'analysis' : 'general';
-  const readOnlyPattern = /只读|仅查看|不要修改|不得写入|\bread.only\b|\breview only\b/i;
   const constraints = strings(taskContext.constraints);
-  const readOnlySources = [
-    readOnlyPattern.test(clauses.constraintText) && 'user-request',
-    constraints.some(value => readOnlyPattern.test(value)) && 'host-restriction',
-    invocationContext.mode === 'plan' && 'host-plan-mode',
-    invocationContext.readOnly === true && 'host-read-only',
-  ].filter(Boolean);
-  const readOnly = readOnlySources.length > 0;
+  const restrictionAssessment=assessRestrictions(clauses.restrictionText,constraints.map(value=>queryClauses(value).restrictionText),invocationContext,clauses.active);
+  if(suppliedOperation?.chatOnly){
+    restrictionAssessment.readOnly=true;
+    restrictionAssessment.sources=unique([...restrictionAssessment.sources,'closed-supplied-input']);
+    restrictionAssessment.evidence.push({source:'user-request',scope:'all-writes',basis:'complete-supplied-text-operation',operation:suppliedOperation.kind});
+  }
+  const {readOnly,sources:readOnlySources}=restrictionAssessment;
   const explicitSkills = list(taskContext.explicitSkills).filter((name) => lexicalScore(activeText, name));
   const objective = typeof taskContext.objective === 'string' && taskContext.objective.trim()
     ? taskContext.objective.trim() : activeText.slice(0, 280);
@@ -192,6 +243,12 @@ export function taskAssessment(query, taskContext = {}, invocationContext = {}) 
   const capabilityNeeds = strings(taskContext.capabilityNeeds);
   const evidence = list(taskContext.evidence).filter(item => item && ['user','project','runtime','reference','inference'].includes(item.source)
     && typeof item.reference === 'string').map(item => ({source:item.source,reference:item.reference,claim:typeof item.claim==='string'?item.claim:undefined}));
+  // Preserve host interpretation in its own fields, but do not use its proposed
+  // mutations as retrieval evidence during a globally read-only invocation.
+  // This projection never changes the source request or restriction decision.
+  const advisoryProjection = value => taskStructure(value).clauses.filter(clause=>!readOnly
+    || !/修复|修改|编辑|重构|新增|创建|开发|生成|部署|发布|推送|发送|删除|安装|\b(?:fix|repair|edit|modify|refactor|create|develop|generate|deploy|publish|push|send|delete|install)\b/i.test(clause)).join('\n');
+  const hostRetrieval = [taskContext.objective ? objective : '', domain, ...statedActions, ...statedDeliverables, ...capabilityNeeds].map(advisoryProjection);
   return {
     objective,
     actions: statedActions,
@@ -200,12 +257,15 @@ export function taskAssessment(query, taskContext = {}, invocationContext = {}) 
     explicitSkills,
     constraints,
     complexity, taskType, complexityEvidence: unique(complexitySignals), development, complexDevelopment, selfContainedFunction, readOnly,
-    activeText, activeClauses: clauses.active, negativeRequests:clauses.negative,
+    activeText, activeClauses: clauses.active, negativeRequests:clauses.negative, constraintClauses:clauses.constraintText.split('\n').filter(Boolean),
     originalRequest: clauses.raw,
+    suppliedOperation,
     acceptanceCriteria, capabilityNeeds, evidence,
-    retrievalText: unique([activeText, objective, domain, ...statedActions, ...statedDeliverables, ...capabilityNeeds]).join(' '),
-    interpretation: {source:'host-context',authority:'advisory-only',hostComplexity,complexityEvidence:hostEvidence},
-    restrictions: {readOnly, sources:readOnlySources, mode:invocationContext.mode || 'unspecified',canGrantPermission:false},
+    taskStructure: structure,
+    retrievalText: unique([structure.intentText, ...hostRetrieval]).join('\n'),
+    interpretation: {source:'host-context',authority:'advisory-only',hostComplexity,complexityEvidence:hostEvidence,
+      retrievalCapabilityNeeds:capabilityNeeds.map(advisoryProjection).filter(Boolean)},
+    restrictions: {readOnly, sources:readOnlySources, protectedScopes:restrictionAssessment.protectedScopes,evidence:restrictionAssessment.evidence,networkForbidden:restrictionAssessment.networkForbidden,executionScope:suppliedOperation?'chat-only':'unspecified',mode:invocationContext.mode || 'unspecified',canGrantPermission:false},
     excludedContext: {futureClauses: clauses.future.length, negativeClauses: clauses.negative.length},
   };
 }
@@ -234,33 +294,48 @@ function skillAvailability(skill, host, runtimeCapabilities) {
   return {discovered, readable, enabled, compatible, toolsAvailable, reasons};
 }
 
-function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibration, retrieval, document) {
-  const active = assessment.activeText;
+export function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibration, retrieval, document) {
+  const active = semanticTaskText(assessment.activeText);
   const retrievalText = assessment.retrievalText || active;
   const names = explicitName(skill);
   // A plugin mention identifies its currently supplied runtime skills, not an
   // unrelated legacy skill which happens to share the package's name.
   if (skill.sourceId?.startsWith('plugin:')) names.push(skill.sourceId.slice(7));
   const denied = list(assessment.negativeRequests).some(clause =>
-    /不要(?:使用|调用|启用|采用|用)|不得(?:使用|调用|启用)|禁止(?:使用|调用|启用)|别用|不需要(?:使用|调用)|do not use|don't use|never use/i.test(clause)
+    /(?:不要|不得|禁止|不允许|不准|不能|不可)(?:使用|调用|启用|采用|用)|别用|不用|不使用|不调用|不启用|不采用|不需要(?:使用|调用)|(?:do not|don't|must not|may not|cannot|can't|should not|shouldn't|never)\s+(?:use|apply|invoke)/i.test(clause)
     && names.some(name => lexicalScore(clause,name)));
   if (denied) return {skill,score:0,explicit:false,capability:inferCapability(skill),phase:inferSkillStage(skill),reasons:['explicit exclusion in user request'],availability:skillAvailability(skill,host,runtimeCapabilities),evidence:[]};
-  const explicit = names.some((name) => {
-    const escaped = String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const named = new RegExp(`(?:^|[\\s，,：:])\\$${escaped}(?=$|[\\s，,。.!！?？])`, 'i');
-    const suffix = /[\p{Script=Han}]$/u.test(name) ? '' : '(?=$|[^a-z0-9_-])';
-    const direct = new RegExp(`(?:使用|调用|启用|采用|用|apply|use|invoke)\\s*(?:\\$)?${escaped}${suffix}`, 'i');
-    return named.test(active) || direct.test(active);
-  });
+  const activeNameText=norm(assessment.activeText);
+  const entityRequest=names.filter(name=>!/^[\x00-\x7f\p{Script=Han}]+$/u.test(name)||activeNameText.includes(norm(name)))
+    .map(name=>requestedName(assessment.activeClauses||[active],name)).find(Boolean);
+  const explicit=!!entityRequest;
   if (assessment.selfContainedFunction && !explicit) return {
     skill, score: 0, explicit: false, capability: inferCapability(skill), phase: inferSkillStage(skill),
     reasons: ['self-contained function; native baseline is sufficient'], availability: skillAvailability(skill, host, runtimeCapabilities), evidence: [],
   };
   const capability = inferCapability(skill);
   const phase = inferSkillStage(skill, capability);
-  const webCreation=/(?:做|制作|搭建|创建|设计|开发|实现|build|create|develop).{0,30}(?:网页|网站|前端|官网|web|website|frontend|landing page)/i.test(retrievalText);
-  const actionMatch=webCreation && ['visual-design','frontend-implementation'].includes(capability);
-  const compatibleDomain=actionMatch || skillDomainCompatible(skill,retrievalText);
+  const needKeys=manualNeedKeys(skill,capability,retrievalText);
+  const webCreation=webImplementation(retrievalText);
+  const actionMatch=webCreation && ['visual-design','frontend-implementation'].includes(capability)
+    || experimentDesign(retrievalText) && capability==='experiment-design'
+    || (electricalDesign(retrievalText)||electricalInspection(retrievalText)) && capability==='electrical-design'
+    || databaseMigration(retrievalText) && capability==='database-migration'
+    || mcpImplementation(retrievalText) && capability==='mcp-authoring'
+    || latexArtifact(retrievalText) && capability==='latex' && needKeys.length>0
+    || accessibilityNeed(retrievalText) && capability==='accessibility'
+    || structuredDataOperation(retrievalText) && capability==='data-analysis'
+    || designToCode(retrievalText) && capability==='design-to-code'
+    || backendImplementation(retrievalText) && capability==='backend-implementation'
+    || (wordDocumentArtifact(retrievalText)||wordDocumentInspection(retrievalText)) && needKeys.includes('word-document')
+    || desktopObservation(retrievalText) && capability==='desktop-operation'
+    || evidenceResearch(retrievalText) && capability==='research'
+    || publicInformationSearch(retrievalText) && capability==='public-information-search'
+    || skillAuthoring(retrievalText) && capability==='skill-authoring'
+    || businessAnalysis(retrievalText) && needKeys.includes('business-analysis')
+    || needKeys.some(key=>['spatial-data','video-postproduction','mathematical-modeling','numerical-computation','option-comparison','game-implementation','source-code-review','latex-source-repair','cad-model'].includes(key))
+    || imageArtifact(retrievalText) && capability==='image-production' && skill.sourceId===host+'-system';
+  const compatibleDomain=skillDomainCompatible(skill,retrievalText);
   const identityText=[skill.id,skill.name,skill.nameZh,...list(skill.aliases)].join(' ');
   const manualSummary=[skill.summaryZh,skill.description].filter(Boolean).join(' ');
   const exclusionStop=new Set(['standard','routine','basic','general','task','use','query']);
@@ -281,12 +356,20 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
     [/web-clone/i, /复刻|克隆|仿站|仿照|还原|参照.{0,12}(?:网页|网站)|clone|reproduce|replicat|recreat|copy.{0,12}(?:site|website)/i],
   ];
   const scopeMismatch=scopeChecks.some(([identity, intent])=>identity.test(skill.id) && !intent.test(retrievalText));
-  const videoSpecialist=/video|视频/i.test(identityText) && /video|视频/i.test(manualSummary);
-  const videoIntent=/视频|短片|成片|剪辑|片头|分镜|镜头|\bvideo\b|\bfilm\b|\bclip\b|\bshot\b/i.test(retrievalText);
-  if (!explicit && (!compatibleDomain || financeSpecialist && !financeIntent || scopeMismatch || explicitlyOutOfScope || videoSpecialist && !videoIntent)) return {
+  const requiredMention=manualSummary.match(/在用户提及\s+([a-z][a-z0-9._-]+)/i)?.[1];
+  const specificContextMismatch=requiredMention && !lexicalScore(retrievalText,requiredMention)
+    || /(?:client[- ]intelligence|资讯网站|情报台)/i.test(identityText+' '+manualSummary) && !/资讯|情报|新闻|日报|rss|news|intelligence|daily digest/i.test(retrievalText)
+    || /experiment[- ]log|实验日志/i.test(identityText) && !experimentWork(retrievalText)
+    || /^extract an existing website's visual system/i.test(manualSummary) && !/https?:\/\/|参考.{0,15}(?:网站|网页)|复刻|仿照|还原|existing website|reference (?:url|site)|recreat/i.test(retrievalText);
+  const videoSpecialist=(/video|视频/i.test(identityText) || /^(?:视频|video)/i.test(manualSummary)) && /video|视频/i.test(manualSummary);
+  const videoIntent=needKeys.includes('video-postproduction') || /视频|短片|成片|剪辑|片头|分镜|镜头|\bvideo\b|\bfilm\b|\bclip\b|\bshot\b/i.test(retrievalText);
+  if (!explicit && (!compatibleDomain || financeSpecialist && !financeIntent || scopeMismatch || specificContextMismatch || explicitlyOutOfScope || videoSpecialist && !videoIntent)) return {
     skill,score:0,explicit,capability,phase,reasons:['specialist scope does not match current task'],availability:skillAvailability(skill,host,runtimeCapabilities),evidence:[],
   };
-  const triggerHits = list(skill.triggers).filter((term) => lexicalScore(active, term));
+  // A language extension inside a filename is a format hint, not an invocation
+  // of every product-specific manual registered under that extension.
+  const triggerHits = list(skill.triggers).filter((term) => lexicalScore(active, term)
+    && !/^(?:py|js|ts|mjs|cjs|sh|ps1)$/i.test(term));
   const description = [skill.summaryZh, skill.description, skill.nameZh, skill.name, skill.category].filter(Boolean).join(' ');
   const rawLexicalHits = [...retrieval.terms].filter((term) => document.identity.has(term) || document.description.has(term))
     .map((term) => {
@@ -298,9 +381,28 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
     .sort((a, b) => b.weight - a.weight);
   const lexicalHits = retrieval.legacy && !retrieval.experimental ? rawLexicalHits : independentHits(rawLexicalHits, retrievalText);
   const descriptionScore = lexicalHits.slice(0, 5).reduce((sum, hit) => sum + hit.weight, 0);
+  // A manual's subject is stronger evidence than incidental vocabulary in a
+  // long description. Provider/version boilerplate and generic roles are not subjects.
+  const genericIdentity=new Set(['codex','plugin','legacy','ecc','system','skill','tool','tools','design','analysis','research','pattern','workflow','expert','pro','creator','create','build','develop','database','query','sql','工具','技能','方法','分析','研究','创建','设计','工作','流程','系统','专业']);
+  const identityTerms=words([skill.nameZh,skill.name,String(skill.id||'').split(':').at(-1)].filter(Boolean).join(' '))
+    .filter(term=>!genericIdentity.has(term)&&!/^\d+$/.test(term));
+  // A substring inside an output filename is not a request for that subject.
+  // Dotted technical names retain their complete identity (e.g. Three.js).
+  const directSubjects=new Set((norm(active).match(/[a-z][a-z0-9]*(?:[._/-][a-z0-9]+)*/g)||[])
+    .flatMap(value=>[token(value),...(value.includes('.')?[token(value.replaceAll('.',''))]:[])]));
+  const identityHits=identityTerms.filter(term=>retrieval.terms.has(term)
+    && (/\p{Script=Han}/u.test(term)||directSubjects.has(term)||retrieval.inferred.some(item=>item.term===term)));
+  // A distinctive technology or file-format subject is already independent
+  // evidence. Requiring an unrelated second word favors broad noisy manuals.
+  const rareSubject=identityHits.some(term=>directSubjects.has(term)&&/^[a-z][a-z0-9]{2,}$/.test(term)
+    && (retrieval.df.get(term)||0)/Math.max(1,retrieval.corpusSize)<=0.025);
+  const subjectMatch=identityHits.length>0&&(rareSubject||identityHits.length/identityTerms.length>=0.67&&lexicalHits.length>=2);
+  const directSubjectMatch=subjectMatch&&identityHits.some(term=>lexicalScore(active,term)&&!retrieval.inferred.some(item=>item.term===term));
   const domain = assessment.domain;
   const domainMatch = domain && lexicalScore([description, ...list(skill.domains)].join(' '), domain);
-  let score = (explicit ? 30 : 0) + Math.min(3, triggerHits.length) * 6 + descriptionScore + (domainMatch ? 3 : 0) + (actionMatch ? 16 : 0);
+  let score = (explicit ? 30 : 0) + Math.min(3, triggerHits.length) * 6 + descriptionScore + (domainMatch ? 3 : 0) + (actionMatch ? 16 : 0) + (subjectMatch ? 12 : 0);
+  // Host-maintained authoring guidance describes that host's packaging contract.
+  if(capability==='skill-authoring'&&skill.sourceId===host+'-system')score+=8;
   if (lexicalScore(active, skill.id)) score += 5;
   if (capability === 'skill-governance' && /技能|skill|路由器|router/i.test(active)) score += 8;
   const diagnosticIntent = /diagnostic|diagnos|troubleshoot|investigat|incident|outage/i.test(active)
@@ -312,15 +414,22 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
     && lexicalHits.some((hit) => hit.term === 'debug');
   if (diagnosticNameMatch) score += 12;
   if (capability === 'browser-automation' && !/浏览器|browser|playwright|网页操作|自动化测试/i.test(active)) score -= 10;
-  const strongDescription = lexicalHits.length >= 2 && descriptionScore >= 7;
-  if (!explicit && !triggerHits.length && !strongDescription && !domainMatch && !diagnosticNameMatch && !actionMatch) score = 0;
+  // Repeated generic description words (download, local, inspect, output) may
+  // recall a manual but cannot justify recommending it. Require a manual-subject
+  // anchor or a requested capability whose action/object scope also matches.
+  const subjectAnchor = identityHits.some(term => !genericIdentity.has(term) && term.length >= 3);
+  const scopedCapability = capability !== 'general' && capabilityDirectlyRequested(capability,retrievalText)
+    && capabilityActionCompatible(capability,retrievalText);
+  const strongDescription = lexicalHits.length >= 2 && descriptionScore >= 7 && (subjectAnchor || scopedCapability);
+  if (!explicit && !triggerHits.length && !strongDescription && !subjectMatch && !domainMatch && !diagnosticNameMatch && !actionMatch) score = 0;
   if (!explicit && !triggerHits.length && !domainMatch && score < 8) score = 0;
   if (score > 0) score += calibration?.adjustment || 0;
   const availability = skillAvailability(skill, host, runtimeCapabilities);
   if (!availability.discovered || !availability.readable || !availability.enabled || !availability.compatible) score = -100;
   const reasons = [];
   if (explicit) reasons.push('explicitly requested in active task');
-  if (actionMatch) reasons.push('creation action and web deliverable match this manual capability');
+  if (subjectMatch) reasons.push('manual subject matches task object: '+identityHits.join(', '));
+  if (actionMatch) reasons.push('requested action and artifact match this manual capability');
   if (triggerHits.length) reasons.push(`matched task signal: ${triggerHits[0]}`);
   if (lexicalHits.length) reasons.push(`distinctive manual terms: ${lexicalHits.slice(0, 3).map((hit) => `${hit.term}${hit.inferred ? ' (inferred)' : ''}`).join(', ')}`);
   if (diagnosticNameMatch) reasons.push('diagnostic request plus mitigation/check requirement matches a general debugging manual');
@@ -331,7 +440,7 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
   const evidence = matchedPhrase ? [{kind: triggerHits.length ? 'trigger' : explicit ? 'explicit' : inference ? 'inferred-description' : 'description', phrase: matchedPhrase,
     querySignal: inference?.evidence || null,
     clauseIndex, snippet: clauseIndex >= 0 ? assessment.activeClauses[clauseIndex].slice(0, 160) : active.slice(0, 160)}] : [];
-  return {skill, score, explicit, capability, phase, reasons, availability, evidence};
+  return {skill, score, explicit, entityRequest, actionMatch, subjectMatch, directSubjectMatch, needKeys, preserveAcrossFloor:actionMatch&&needKeys.length>0||subjectMatch&&rareSubject, capability, phase, reasons, availability, evidence};
 }
 
 function candidateCard(item, assessment) {
@@ -344,6 +453,7 @@ function candidateCard(item, assessment) {
     summaryZh: skill.summaryZh || skill.description || '',
     path: skill.path || null, sourceId: skill.sourceId || 'legacy-registry', contentHash: skill.contentHash || null,
     parentId: skill.parentId || null, origins: list(skill.origins),
+    alternatives: item.alternatives || [],
     phase, capability, score, explicit, reasons, evidence, availability,
     suggestedMode: action,
     activationCondition: `Consult only if ${capability} is needed for the active ${phase} work and the main agent confirms scope and availability.`,
@@ -423,6 +533,25 @@ function compactCoverage(coverage = {}) {
   };
 }
 
+// An unqualified name is one request, even when several installed libraries
+// contain a manual with that name. Prefer the host's own maintained entry;
+// retain exact qualified/version requests and expose the other origins as choices.
+function manualIdentity(skill) {
+  let name=skill.name || skill.nameZh || String(skill.id).split(':').at(-1);
+  if(/^skill_\d+$/.test(name))name=[...list(skill.aliases),...list(skill.triggers)].find(x=>!/^skill_\d+$/.test(x)) || name;
+  return norm(name).replace(/[_ ]/g,'-');
+}
+function hostOriginRank(skill,host) {
+  const sources=[skill.sourceId,...list(skill.origins).map(x=>x.sourceId)];
+  if(sources.includes(host+'-system'))return 6;
+  if(sources.includes('project-'+host))return 5;
+  if(sources.includes(host))return 4;
+  if(sources.some(x=>String(x).startsWith('plugin:')))return 3;
+  if(sources.includes('agents'))return 2;
+  if(sources.includes('legacy'))return 1;
+  return 0;
+}
+
 function advise(query, options = {}, filters = {}) {
   const routeId = options.routeId || randomUUID();
   const host = options.host || 'codex';
@@ -449,11 +578,27 @@ function advise(query, options = {}, filters = {}) {
   const retrieval = retrievalIndex(skills, assessment.retrievalText, options.retrievalProfile === 'experimental', options.retrievalProfile === 'legacy');
   let ranked = skills.map((skill, index) => scoreCandidate(skill, assessment, host, options.runtimeCapabilities, feedback.get(skill.id)?.byMode?.consult, retrieval, retrieval.documents[index]))
     .filter((item) => item.score > 0);
-  const explicitProviders = new Set(ranked.filter(item => item.explicit && item.skill.sourceId?.startsWith('plugin:')).map(item => item.skill.sourceId.slice(7)));
-  ranked = ranked.filter(item => item.skill.sourceId?.startsWith('plugin:') || !explicitName(item.skill).some(name => explicitProviders.has(name)));
+  // Restrict the requested search universe before preferring one same-name source.
   if (filters.source) ranked = ranked.filter((item) => item.skill.sourceId === filters.source || list(item.skill.origins).some((origin) => origin.sourceId === filters.source));
   if (filters.domain) ranked = ranked.filter((item) => lexicalScore([item.capability, item.skill.category, item.skill.summaryZh, ...list(item.skill.domains)].join(' '), filters.domain));
   if (filters.phase) ranked = ranked.filter((item) => item.phase === filters.phase);
+  const explicitProviders = new Set(ranked.filter(item => item.explicit && item.skill.sourceId?.startsWith('plugin:')).map(item => item.skill.sourceId.slice(7)));
+  ranked = ranked.filter(item => item.skill.sourceId?.startsWith('plugin:') || !explicitName(item.skill).some(name => explicitProviders.has(name)));
+  const namedChoices=new Map();
+  const exactQualified=item=>item.explicit && /:|\d+\.\d+/.test(item.skill.id) && lexicalScore(assessment.activeText,item.skill.id);
+  for(const item of ranked){
+    if(exactQualified(item))continue;
+    const key=manualIdentity(item.skill),previous=namedChoices.get(key);
+    if(!previous || hostOriginRank(item.skill,host)>hostOriginRank(previous.skill,host)
+      || hostOriginRank(item.skill,host)===hostOriginRank(previous.skill,host)&&item.score>previous.score)namedChoices.set(key,item);
+  }
+  for(const item of ranked){
+    const chosen=namedChoices.get(manualIdentity(item.skill));
+    if(chosen&&chosen!==item&&!exactQualified(item))(chosen.alternatives??=[]).push({id:item.skill.id,sourceId:item.skill.sourceId,contentHash:item.skill.contentHash});
+  }
+  ranked=ranked.filter(item=>exactQualified(item)||namedChoices.get(manualIdentity(item.skill))===item);
+  const nativeImageManual=ranked.find(item=>item.capability==='image-production'&&item.skill.sourceId===host+'-system');
+  if(nativeImageManual&&imageArtifact(assessment.retrievalText))ranked=ranked.filter(item=>item.explicit||item.capability!=='image-production'||item===nativeImageManual);
   ranked.sort((a, b) => b.score - a.score || a.skill.id.localeCompare(b.skill.id));
   // Byte-identical manuals add no evidence. Preserve explicit requests while
   // avoiding another reading slot for a redundant, unrequested installation.
@@ -466,12 +611,32 @@ function advise(query, options = {}, filters = {}) {
   });
   if (ranked.length) {
     const floor = Math.max(8, ranked[0].score * (assessment.complexity === 'simple' ? 0.82 : 0.68));
-    ranked = ranked.filter((item) => item.score >= floor || item.explicit || item.reasons.some((reason) => reason.startsWith('matched task signal:')));
+    ranked = ranked.filter((item) => item.score >= floor || item.explicit || item.preserveAcrossFloor || item.reasons.some((reason) => reason.startsWith('matched task signal:')));
   }
   const budget = budgetFor(assessment, ranked, options.qualityProfile);
   const limit = Number.isInteger(filters.limit) && filters.limit > 0 ? Math.min(filters.limit, 12) : budget.consultCardLimit;
   const explicitCandidates = ranked.filter(item => item.explicit);
-  const selectedCards = [...explicitCandidates, ...ranked.filter(item => !item.explicit).slice(0, Math.max(0, limit - explicitCandidates.length))];
+  const selectedCards=[...explicitCandidates],covered=new Set(selectedCards.flatMap(item=>item.needKeys||[]));
+  const needs=unique(ranked.flatMap(item=>item.needKeys||[]));
+  for(const need of needs){
+    if(covered.has(need))continue;
+    const choices=ranked.filter(item=>item.needKeys?.includes(need));
+    // A subject-specific manual is a stronger fit than a large handbook whose
+    // description merely mentions many abilities. Score breaks ties.
+    choices.sort((a,b)=>Number(!!b.directSubjectMatch)-Number(!!a.directSubjectMatch)||Number(!!b.subjectMatch)-Number(!!a.subjectMatch)||b.score-a.score);
+    const chosen=choices[0];if(!chosen)continue;
+    if(!selectedCards.includes(chosen))selectedCards.push(chosen);
+    for(const key of chosen.needKeys||[])covered.add(key);
+  }
+  for(const item of ranked){
+    if(selectedCards.length>=Math.max(limit,explicitCandidates.length)||selectedCards.includes(item))continue;
+    if(item.needKeys?.length&&item.needKeys.every(key=>covered.has(key)))continue;
+    // Once the requested outcomes have a primary manual, incidental description
+    // overlap is not another independent need. Explicit names, subjects, and
+    // direct triggers remain eligible; no minimum candidate count is required.
+    if(covered.size&&!item.explicit&&!item.subjectMatch&&!item.reasons.some(reason=>reason.startsWith('matched task signal:')))continue;
+    selectedCards.push(item);
+  }
   const consultCandidates = selectedCards.map((item) => {
     const card = candidateCard(item, assessment);
     const byMode = feedback.get(item.skill.id)?.byMode;
