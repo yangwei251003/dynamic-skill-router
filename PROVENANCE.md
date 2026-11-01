@@ -1,6 +1,6 @@
 # 来源、排除范围与许可
 
-本项目来自维护者本地的 `yangwei-dynamic-skill-router` 核心（4.2.0）及其自有Skill契约。Codex插件清单中的作者为yangwei。公开化在独立副本中进行，未改变原活动服务。
+本项目来自维护者本地的 `yangwei-dynamic-skill-router` 核心（4.2.0 基线与 4.2.1 局部增强）及其自有Skill契约。公开化在独立副本中进行，未改变原活动服务。
 
 ## 本次收录
 

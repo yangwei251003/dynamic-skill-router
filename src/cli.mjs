@@ -47,7 +47,7 @@ try {
       output(discoverCapabilities(options));
     }else if(command==='search-capabilities'){
       query||=fs.readFileSync(0,'utf8').trim();if(!options.routeId)throw new Error('search-capabilities requires --route-id');
-      output({routeId:options.routeId,...adviseCapabilities(taskAssessment(query,options.taskContext),options),recoveryPlan:planRecovery({...taskAssessment(query,options.taskContext),rawText:query},options)});
+      output({routeId:options.routeId,...adviseCapabilities({...taskAssessment(query,options.taskContext),rawText:query},options),recoveryPlan:planRecovery({...taskAssessment(query,options.taskContext),rawText:query},options)});
     }else if(command==='route'||command==='plan'){
       query||=fs.readFileSync(0,'utf8').trim(); const v4=options.contractVersion===4;
       const result=v4?routeTaskV4(query,options):routeTask(query,options);

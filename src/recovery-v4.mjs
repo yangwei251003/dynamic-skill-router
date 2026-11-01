@@ -1,3 +1,4 @@
+import {constrainRecovery} from './invocation-constraints.mjs';
 const list=x=>Array.isArray(x)?x:[];
 const clean=x=>String(x||'').trim();
 
@@ -12,7 +13,7 @@ function searchPhrase(value) {
 }
 
 /** Lightweight recovery policy: host executes discovery/install, never this module. */
-export function planRecovery(assessment, options = {}) {
+function planRecoveryBase(assessment, options = {}) {
   const state=options.recoveryContext || {};
   const explicitRejection=/^(?:(?:这次|这个|这个结果|效果|结果|还是|仍然|你做的|做得)\s*)+(?:不行|不好|不满意|不对|太差)|^(?:this (?:result|output) is (?:bad|wrong)|still (?:wrong|broken))/i.test(assessment.activeText||'');
   const rejected=state.userRejected===true||explicitRejection;
@@ -64,3 +65,5 @@ export function useFastPath(assessment, options, recovery) {
   return assessment.selfContainedFunction===true||/^(?:你好|您好|谢谢|早上好|hello|hi|thanks)[!！。.\s]*$/i.test(active)
     ||/^(?:计算|算一下|算算|what is)?\s*[\d\s+\-*/×÷().=]+[?？]?$/i.test(active);
 }
+
+export function planRecovery(assessment,options={}) { return constrainRecovery(planRecoveryBase(assessment,options),assessment,options); }

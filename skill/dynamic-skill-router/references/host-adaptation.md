@@ -1,6 +1,6 @@
 # 其他宿主的只读共享核心适配
 
-共享核心：<USER_HOME>/DeskBox/我的桌面/我的资源库/Assets/全局技能/动态技能路由器
+共享核心：<CORE_PATH>（当前公共仓库的克隆目录）
 Node：C:/Program Files/nodejs/node.exe（先核实存在）
 MCP 入口：共享核心/src/mcp-server.mjs；CLI 后备：共享核心/src/cli.mjs。
 
