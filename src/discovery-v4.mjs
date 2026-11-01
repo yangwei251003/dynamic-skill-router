@@ -456,13 +456,25 @@ export function discoverSkills(options = {}) {
     const slug = cleanId(chosen.runtime?.id || relativeName);
     const id = legacySkill?.id || `${chosen.source.id}:${slug}`;
     const nameZh = legacySkill?.nameZh || meta.name || path.basename(chosen.path);
-    const summaryZh = legacySkill?.summaryZh || meta.description || skillText.replace(/^---[\s\S]*?---\s*/, '').split(/\r?\n/).find((line) => line.trim())?.replace(/^#+\s*/, '') || nameZh;
+    // Some legacy registry entries contain only a generated placeholder.
+    // Prefer the actual manifest description in that narrow case, while
+    // retaining intentionally curated registry summaries and the old fallback.
+    const legacySummary = legacySkill?.summaryZh;
+    const isPlaceholder = value => typeof value === 'string'
+      && /^使用\s+.{1,100}\s+技能完成与其说明匹配的任务[。.]?$/u.test(value.trim());
+    const placeholderSummary = isPlaceholder(legacySummary);
+    const description = typeof meta.description === 'string' ? meta.description.trim() : '';
+    const usableDescription = description && !isPlaceholder(description)
+      && !/^(?:null|undefined|none|n\/?a|todo|tbd|待完善|待补充|暂无|无)[.!。\s]*$/i.test(description) ? description : '';
+    const summaryZh = (placeholderSummary && usableDescription ? usableDescription : legacySummary)
+      || usableDescription || skillText.replace(/^---[\s\S]*?---\s*/, '').split(/\r?\n/).find((line) => line.trim())?.replace(/^#+\s*/, '') || nameZh;
     const enabled = group.some((entry) => entry.enabled) && !['disabled', 'archived'].includes(legacySkill?.status);
     const hostState = legacySkill?.hostCompatibility?.[host];
     const compatible = hostState === 'unsupported' ? false : hostState ? true : inferredCompatibility(host, group);
     const toolsAvailable = chosen.source.kind === 'plugin' && host !== (chosen.source.host || 'codex') || chosen.source.kind === 'host-plugin' && compatible === false ? false : null;
     const skill = {
       ...(legacySkill || {}), id, nameZh, summaryZh, path: chosen.path,
+      ...(placeholderSummary && !usableDescription ? {summaryQuality:'placeholder'} : {}),
       aliases: unique([...(legacySkill?.aliases || []), meta.name, path.basename(chosen.path)]),
       triggers: legacySkill?.triggers?.length ? legacySkill.triggers : unique([meta.name, path.basename(chosen.path)]),
       category: legacySkill?.category || chosen.source.kind,
