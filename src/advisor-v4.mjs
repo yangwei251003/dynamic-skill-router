@@ -122,9 +122,17 @@ const explicitName = (skill) => unique([skill.id, skill.nameZh, skill.name, ...l
 
 function queryClauses(query) {
   const raw = String(query || '');
+  // An explicit source declaration owns its following sentence, even without
+  // quotation marks. Bind this on the untouched text: URL projection may erase
+  // terminal ASCII punctuation. A following hard boundary starts new work.
+  const attributed = raw.replace(/(^|[。；;\n]|\.(?=\s|$))[ \t]*(?:(?:引用(?:文本|内容)?|引文|摘录(?:正文|文本|内容)?|转述(?:正文|文本|内容)?)(?:是|为|如下)?[ \t]*[:：]|(?:quoted\s+(?:text|content)|excerpt|reported\s+(?:text|content))(?:\s+(?:is|reads|follows))?[ \t]*[:：])[ \t]*(?:\r?\n[ \t]*)?(?:(?![。；;\n]|\.(?=\s|$))[\s\S])*/gi, (value,boundary)=>{
+    // Leave paired literals intact for the existing quote parser; a period
+    // inside quoted data must not leave a dangling second command outside it.
+    return /^[“"「『‘']/.test(value.slice(value.search(/[:：]/)+1).trimStart())?value:boundary+' ';
+  });
   // Host plugin mentions are explicit names; preserve their surrounding clause
   // so quoted, future and negative uses still go through the scope filters.
-  const mentions = taskText(raw.replace(/\[\$([\w.:-]+)\]\(app:\/\/[^\s)]+\)/g, ' $$$1 '));
+  const mentions = taskText(attributed.replace(/\[\$([\w.:-]+)\]\(app:\/\/[^\s)]+\)/g, ' $$$1 '), {preserveNetworkSources:true});
   // Reported instructions remain source material even when they quote only a
   // skill identifier. Strip reporting clauses before unquoting direct requests.
   const reported = mentions
@@ -699,6 +707,7 @@ function advise(query, options = {}, filters = {}) {
     capabilityCandidates:capabilities.candidates,
     capabilityNeedCoverage:capabilities.needCoverage,
     hostCapabilityCoverage:capabilities.hostCapabilityCoverage,
+    sourceAccessRequirements:capabilities.sourceAccessRequirements,
     capabilityCoverage:{revision:capabilities.revision,...capabilities.coverage,errors:capabilities.errors},
     invocationPolicy:{phase:capabilities.phase,...capabilities.executionPolicy},
     task: assessment,
@@ -745,6 +754,7 @@ function formatBaseAgentContextV4(result) {
 
 export function formatAgentContextV4(result) {
   const parts=[formatBaseAgentContextV4(result)];
+  for(const requirement of list(result?.sourceAccessRequirements)) parts.push(`Source access (${requirement.accessClass}; authentication=${requirement.authenticationStatus}; advisory only): ${requirement.guidance}`);
   if (result?.task?.restrictions?.readOnly) parts.push('Host/user restriction: read-only; advice cannot authorize writes.');
   if (list(result?.methodCandidates).length) {
     parts.push('Optional task methods (skip unless useful):');

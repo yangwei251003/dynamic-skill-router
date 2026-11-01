@@ -293,7 +293,8 @@ function registryPurposePrefixes(capabilities) {
 function capabilityRole(purpose) {
   if (diagnosticCompilationPurpose(purpose)) return 'compilation-diagnostics';
   if (publicWebPurpose(purpose)) return 'public-web-access';
-  if (/^(?:Runs?|Executes?)\s+(?:a\s+)?(?:shell\s+)?command\b[^.!?]*\b(?:PTY|terminal|shell|local)\b/i.test(purpose)
+  if (/^(?:Runs?|Executes?)\s+(?:a\s+)?(?:local\s+(?:shell\s+)?|shell\s+)commands?\b/i.test(purpose)&&!/^.*?\b(?:remote|cloud|database|SQL)\b[^.!?]*[.!?]?$/i.test(primaryPurpose(purpose))
+    || /^(?:Runs?|Executes?)\s+(?:a\s+)?(?:shell\s+)?command\b[^.!?]*\b(?:PTY|terminal|shell|local)\b/i.test(purpose)
     || /^Execute\s+(?:JavaScript|Python|code)\b[^.!?]*\b(?:persistent|local|repl|runtime)\b/i.test(purpose)) return 'local-execution';
   if (/^(?:Locate|Find|Discover)\b[^.!?]*\b(?:bundled|workspace)\b[^.!?]*\b(?:dependenc|runtime|librar)/i.test(purpose)) return 'document-runtime';
   if (/^(?:View|Inspect|Read)\b[^.!?]*\b(?:local|filesystem|disk)\b[^.!?]*\bimage\b|^(?:View|Inspect|Read)\b[^.!?]*\bimage\b[^.!?]*\b(?:local|filesystem|disk)\b/i.test(purpose)) return 'image-observation';
@@ -305,24 +306,57 @@ function publicWebPurpose(purpose) {
   const opening=primaryPurpose(purpose);
   // A general public-web entry can expose several methods. Its own purpose
   // establishes discovery, not a particular method, effect or authentication.
-  if (/\b(?:private|personal|account|mailbox|workspace|intranet|local|offline)\b|私人|账户|账号|内网|本地|离线/i.test(opening)) return false;
-  return /^(?:Tool for\s+)?(?:access(?:ing)?|brows(?:e|ing))\s+(?:the\s+)?(?:internet|public\s+web(?:sites?|pages?)?)\b/i.test(opening)
+  if (/\b(?:private|personal|account|mailbox|workspace|intranet|local|offline|database)\b|\b(?:tools?|plugins?)\s+(?:catalog|directory|registry|management)\b|私人|账户|账号|内网|本地|离线/i.test(opening)) return false;
+  return /^(?:Tool for\s+)?(?:access(?:ing)?|brows(?:e|ing)|search(?:ing)?|open(?:ing)?)\s+(?:the\s+)?(?:internet|public\s+web(?:sites?|pages?)?)\b/i.test(opening)
     || /^(?:用于)?(?:访问|浏览)(?:互联网|公网|公开网站|公开网页)/.test(opening);
 }
 
-function publicWebNeed(assessment) {
+const restrictedAccess=/(?:受限|私有|私人|需(?:要)?(?:先)?登录|登录后|已有登录|登录权限|凭.{0,12}登录|经过认证|身份认证)|\b(?:restricted|private|authenticated|authentication[- ]required|login[- ]required|sign[- ]in[- ]required|signed[- ]in|logged[- ]in|existing\s+(?:login|session)|requires?\s+(?:a\s+)?(?:login|authentication))\b/i;
+const sourceRead=/阅读|读取|查阅|查看|获取|打开|访问|浏览|检索|搜索|\b(?:read|fetch|open|browse|visit|consult|search|retrieve)\b/i;
+const remoteSource=/公网来源|本地网络来源|https?:\/\/|(?:受限|私有|私人|内网).{0,12}(?:页面|网页|网站|文档|资料)|\b(?:page|website|document|resource|intranet)\b/i;
+function accessWork(assessment) {
   const clauses=list(assessment.activeClauses).length?assessment.activeClauses:[assessment.activeText || ''];
-  const source=/官网|官方(?:网站|网页|来源|文档|资料|公告)|公开(?:网页|网站|来源|资料)|门户|互联网|\b(?:internet|public\s+(?:web|websites?|webpages?|sources?)|official\s+(?:web\s+)?(?:sites?|websites?|sources?|documentation|announcements?))\b|https?:\/\//i;
+  return currentWorkClauses(clauses.map(value=>requestEvidenceText(positiveRequestText(value))));
+}
+function restrictedSourceAt(work,index) {
+  const clause=work[index];
+  if(restrictedAccess.test(clause))return true;
+  // A separate access qualifier belongs to the preceding resource. Another
+  // resource/action clause cannot lend its private authentication requirement.
+  const next=work[index+1] || '';
+  return !remoteSource.test(next)&&restrictedAccess.test(next)
+    && /^(?:请)?(?:用|使用|凭|通过)|^\s*(?:use|using|with|via)\b/i.test(next);
+}
+function sourceAccessNeeds(assessment) {
+  const work=accessWork(assessment);
+  return work.flatMap((clause,index)=>{
+    if(!remoteSource.test(clause)||!sourceRead.test(clause)||!restrictedSourceAt(work,index)
+      || /本地(?:保存|副本|文件)|离线|\b(?:local\s+(?:copy|file)|offline)\b|(?:给定|已提供|粘贴).{0,15}(?:正文|内容|摘录)|\b(?:provided|supplied|pasted)\s+(?:text|content|excerpt)\b/i.test(clause)
+      || /^\s*(?:(?:please|only|now)\s+|请|只|仅)*(?:explain|describe|how\b|解释|介绍|说明如何|如何)/i.test(clause))return [];
+    return [{accessClass:'authenticated-private',requirementSource:'user-request',evidence:clause,
+      authenticationStatus:'unknown',capabilityStatus:'unverified',
+      gaps:['authenticated-source-capability-unverified','authentication-state-unverified'],
+      authority:'advisory-only',
+      guidance:'该来源需要与目标资源匹配的受限内容读取能力及认证状态证据；当前元数据未证明可读取或已登录。沿用现有授权，核实可用连接器/浏览器会话与目标访问条件；公开搜索不能证明读到了受限内容，保留用户对搜索与上传的限制。'}];
+  });
+}
+
+function publicWebNeed(assessment, includeHostNeeds = true) {
+  const source=/公网来源|官网|官方(?:网站|网页|来源|文档|资料|公告)|公开(?:网页|网站|来源|资料)|门户|互联网|\b(?:internet|public\s+(?:web|websites?|webpages?|sources?)|official\s+(?:[a-z][a-z0-9_-]*\s+){0,3}(?:web\s+)?(?:sites?|websites?|sources?|docs?|documentation|announcements?))\b|https?:\/\//i;
   // Chinese lookup verbs admit ordinary aspect/reduplication, not just formal
   // 查询. Bare 查/搜 require a request lead, avoiding nouns such as 调查表.
-  const retrieve=/(?:查(?:询|找|阅|看|证|一下|一查|下|查)|搜(?:索|一下|一搜|下|搜)|看(?:一下|一看|看)|(?:^|请|帮我|替我|先|再)\s*[查搜]|只搜|检索|核实|核查|核对|确认|获取|读取|访问|浏览|调研|标注|引用)|\b(?:search|look\s+up|find|check|verify|fetch|read|browse|visit|consult|research|cite)\b/i;
-  const work=currentWorkClauses(clauses.map(value=>requestEvidenceText(positiveRequestText(value))));
+  const retrieve=/(?:查(?:询|找|阅|看|证|一下|一查|下|查)|搜(?:索|一下|一搜|下|搜)|看(?:一下|一看|看)|(?:^|请|帮我|替我|先|再)\s*[查搜]|只搜|检索|核实|核查|核对|确认|获取|阅读|读取|打开|访问|浏览|调研|比较|对比|标注|引用)|\b(?:search|look\s+up|find|check|verify|fetch|read|open|browse|visit|consult|research|compare|cite)\b/i;
+  const work=accessWork(assessment);
   if(work.some(clause=>/^(?:请)?(?:只|仅)(?:用|使用|根据|依据|基于).{0,15}(?:给定|提供|粘贴|附上).{0,15}(?:正文|内容|摘录|资料|材料|文本)|^\s*(?:use|consult)\s+only\s+(?:the\s+)?(?:provided|supplied|pasted|attached)\b/i.test(clause)))return false;
-  const eligible=work.map(clause=>{
+  const eligible=work.map((clause,index)=>{
+    // currentWorkClauses normalizes pure chat speech to this inert marker.
+    // Host retrieval hints must not turn that marker into external work.
+    if(clause==='说明')return false;
+    if(restrictedSourceAt(work,index))return false;
     // Local copies, account records, and explanations are different inputs.
     // Evaluate each work clause so a separate public lookup can still survive.
     if (/本地|离线|私人|私有|账户|账号|登录后|我的.{0,12}(?:订单|账单|订阅|记录|数据)|个人(?:信息|记录|账单|订单|订阅)|\bmy\s+(?:orders?|invoices?|subscriptions?|records?|data)\b|\b(?:local|offline|private|personal|account|logged[- ]in|intranet)\b|localhost|127\.0\.0\.1|file:\/\//i.test(clause)) return false;
-    if (/^\s*(?:(?:please|only)\s+|请|只|仅|只需|仅需)*(?:explain|describe|how\b|解释|介绍|说明如何|如何)/i.test(clause)) return false;
+    if (/^\s*(?:(?:please|only|now|currently)\s+|请|现在|本次|本轮|只|仅|只需|仅需)*(?:explain|describe|how\b|解释|介绍|说明如何|如何)/i.test(clause)) return false;
     if (/(?:给定|已提供|附上|粘贴).{0,15}(?:正文|内容|摘录|资料|材料|文本)|\b(?:provided|supplied|pasted|attached)\s+(?:text|content|excerpt|documents?)\b/i.test(clause)) return false;
     return clause;
   });
@@ -330,8 +364,15 @@ function publicWebNeed(assessment) {
   // unrelated mentions or an excluded local/private clause cannot supply it.
   const sourceInstruction=clause=>clause&&source.test(clause)
     && /^(?:请)?(?:资料来源|信息来源|来源|出处|以|用|依据|根据)|^\s*(?:use|consult)\b.*\b(?:source|reference)\b/i.test(clause);
-  return eligible.some((clause,index)=>clause&&retrieve.test(clause)
-    && (source.test(clause)||sourceInstruction(eligible[index-1])||sourceInstruction(eligible[index+1])));
+  if(eligible.some((clause,index)=>clause&&retrieve.test(clause)
+    && (source.test(clause)||sourceInstruction(eligible[index-1])||sourceInstruction(eligible[index+1]))))return true;
+  // Host interpretations retain their separate retrieval lane. They cannot
+  // revive an excluded local/explanation/supplied-text task or lend a source
+  // across user clauses; each need must independently establish public lookup.
+  return includeHostNeeds&&eligible.some(Boolean)&&!sourceAccessNeeds(assessment).length
+    && list(assessment.interpretation?.retrievalCapabilityNeeds??assessment.capabilityNeeds)
+      .filter(value=>typeof value==='string')
+      .some(value=>publicWebNeed({activeText:value,activeClauses:[value]},false));
 }
 
 function diagnosticCompilationPurpose(purpose) {
@@ -390,8 +431,10 @@ function taskSubstrateNeeds(assessment) {
   const localEvidence=localExecution?currentWorkClauses(clauses.map(positiveRequestText)).filter(value=>
     runtimeAction(value)||/文件|目录|脚本|源码|报告|计算表|命令|\.(?:[a-z][a-z0-9]{1,5})\b|\b(?:files?|directories|scripts?|source code|report|command|bridge|local api)\b|本地接口/i.test(value)
       && !/^(?:文件|资料|文本)(?:中|里)(?:若|如果|假如)/.test(value.trim())) : [];
+  const userPublicWeb=publicWebNeed(assessment,false);
   return {
-    'public-web-access': publicWebNeed(assessment),
+    'public-web-access': userPublicWeb||publicWebNeed(assessment),
+    publicWebNeedSource:userPublicWeb?'user-request':'host-context',
     'local-execution': localExecution,
     localExecutionEvidence:localEvidence,
     'compilation-diagnostics': compilationDiagnostics,
@@ -1110,7 +1153,7 @@ export function adviseCapabilities(assessment, options = {}) {
     score+=scoreAdjustment;
     cards.push({id:entry.id,kind:entry.kind,name:entry.name,plugin:entry.plugin || null,server:entry.server || null,
       description:purpose.slice(0,240),score,explicit,providerRequested:providerMentioned,matchedTerms:shared.slice(0,6),needMatches,
-      ...(fillsSubstrate?{capabilityRole:role,requirementSource:'user-request',requirementEvidence:recordRead?.evidence || OUTCOME[op.phase]}:{}),
+      ...(fillsSubstrate?{capabilityRole:role,requirementSource:role==='public-web-access'?substrateNeeds.publicWebNeedSource:'user-request',requirementEvidence:recordRead?.evidence || OUTCOME[op.phase]}:{}),
       ...(recordRead?{recordReadEvidence:recordRead}:{}),
       ...(discovery?{discoveryEvidence:{sourceId:discovery.sourceId,purpose:discovery.purpose,scope:'functional-discovery-only; callability, authentication and effects unverified'}}:{}),
       availability:{discovered:true,enabled:entry.enabled,callable:entry.callable,evidence:entry.evidence,
@@ -1134,6 +1177,7 @@ export function adviseCapabilities(assessment, options = {}) {
   const needCoverage = {requested:needs,covered:needs.filter((_,index)=>covered.has(index)),uncovered:needs.filter((_,index)=>!covered.has(index)),
     verification:'Retrieval coverage only; tool execution and output quality remain unverified.'};
   return {revision:inventory.revision,coverage:inventory.coverage,errors:inventory.errors,phase,candidates,
+    sourceAccessRequirements:sourceAccessNeeds(assessment),
     needCoverage,
     hostCapabilityCoverage:{requests:hostRequests.requests.map(request=>{
       const matched=candidates.filter(card=>card.hostRequestMatches?.some(item=>item.index===request.index));

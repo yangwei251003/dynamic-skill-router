@@ -67,10 +67,25 @@ function negativeActionItems(clause) {
 }
 
 function forbidsAllWrites(clause) {
- return negativeActionItems(clause).some(item=>
+ return negativeActionItems(clause).map(item=>item.replace(/^(?:进行|做出|作出)|^(?:make|perform)\s+/i,'')).some(item=>
   /^(?:任何|所有|一切)(?:(?:持久(?:化)?(?:状态)?|外部状态))?(?:写入|修改|改动)$/.test(item)
   || /^(?:修改|改动|改变|更新|写入)(?:任何|所有|一切)(?:外部状态|持久(?:化)?状态|状态|文件|数据)$/.test(item)
   || /^(?:(?:any|all)\s+)?(?:(?:persistent|external)\s+)?(?:state\s+)?(?:writes?|mutations?|modifications?|changes?|edits?)$/i.test(item));
+}
+
+// Quantification covers the complete object, not every possible write. Bare
+// quantifiers and universal objects stay conservative; a qualified category
+// (e.g. "any telemetry archive files") remains protected in its entirety.
+// This describes a boundary only; it does not authorize work outside it.
+function unboundedWriteTarget(target) {
+ // Classifiers, articles and emphatic "single" belong to the quantifier, not
+ // to a narrower object class. Normalize only these grammatical complements.
+ const value=String(target).trim().replace(/[.!！?？]+$/,'').trim()
+  .replace(/^(?:任何|所有|一切|每)(?:的)?(?:一(?:个|份|项)|单个|个)?(?:的)?/,'所有')
+  .replace(/^(?:any|all|every|each(?:\s+and\s+every)?)\b\s*(?:(?:of|the|single|one|individual)\b\s*)*/i,'all ').trim();
+ return /^(?:anything|everything|any|all|every)$/i.test(value)
+  || /^(?:任何|所有|一切)(?:的)?(?:文件|数据|内容|东西|事物|对象|状态|外部状态|持久(?:化)?状态|操作|写入|修改|改动)?$/.test(value)
+  || /^(?:any|all|every)\s+(?:of\s+)?(?:the\s+)?(?:(?:external|persistent)\s+)?(?:files?|data|contents?|things?|objects?|state|operations?|writes?|mutations?|modifications?|changes?|edits?)(?:\s+at all)?$/i.test(value);
 }
 
 // A locative adjunct names where inspection occurs, not the object protected
@@ -197,7 +212,7 @@ function restrictionTarget(clause) {
     const prefix=clause.match(/^(.*?)\s*(?:绝不|不要|不得|禁止|不允许|不能|不可|不)(?:再|直接|实际)?(?:修改|改动|改变|改写|写入|更改|变更|编辑|保存|删除|覆盖|重命名|改|写)(?:$|[。；;])/i)?.[1]?.trim();
     return prefix&&!/^(?:请|本次|本轮|所有操作|整个任务)$/.test(prefix)?prefix:null;
   }
-  if(/^(?:任何|所有)(?!原|输入|参考)|^(?:any|all)\s+(?!original|input|source|reference)/i.test(target))return null;
+  if(unboundedWriteTarget(target))return null;
   return target;
 }
 

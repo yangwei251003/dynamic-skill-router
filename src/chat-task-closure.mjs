@@ -38,6 +38,52 @@ function numericStatistics(raw){
  return actions.length&&aggregate.test(actions[0])&&actions.slice(1).every(resultExplanation)?witness('supplied-statistics',values.length):null;
 }
 
+const numericCountWords='one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty'.split(' ');
+function numericCount(value){
+ if(!value)return null;
+ if(/^\d+$/.test(value))return Number(value);
+ const en=numericCountWords.indexOf(value.toLowerCase());if(en>=0)return en+1;
+ const digits='一二三四五六七八九';
+ if(value==='两')return 2;
+ if(value.length===1&&digits.includes(value))return digits.indexOf(value)+1;
+ if(value==='十')return 10;
+ if(/^十[一二三四五六七八九]$/.test(value))return 11+digits.indexOf(value[1]);
+ if(value==='二十')return 20;
+ return NaN;
+}
+
+function numericSort(raw){
+ // Every clause is consumed: one operation binds one colon-delimited source;
+ // any remaining clauses must be exact chat-output restrictions. No lookup,
+ // file, code or second operation can be projected out of this grammar.
+ const parts=sentences(raw),first=ask(parts.shift()||'');
+ const binding=/^([^:：]+)[:：]\s*(.+)$/.exec(first);if(!binding)return null;
+ const instruction=binding[1].trim();
+ const zh=/^(?:按|按照)(?:数字|数值)?(从小到大|从大到小|升序|降序)(?:排列|排序)\s*(.+)$/.exec(instruction);
+ const en=/^(?:sort|order|arrange)\s+(.+?)\s+in\s+(ascending|descending)(?:\s+(?:numeric|numerical))?\s+order$/i.exec(instruction);
+ if(!zh&&!en)return null;
+ const reference=(zh?zh[2]:en[1]).trim();
+ const collection=zh
+  ? /^(?:(?:这|这些|以下|下面|给定)(?:的)?)?(?:([\d一二三四五六七八九十两]+)(?:个)?)?(?:项|数字|数值|数|条目)$/.exec(reference)
+  : new RegExp('^(?:(?:the|these|following|supplied|given)\\s+)?(?:(\\d+|'+numericCountWords.join('|')+')\\s+)?(?:numbers|values|items|entries)$','i').exec(reference);
+ if(!collection)return null;
+ const count=numericCount(collection[1]);
+ const source=binding[2].trim(),items=source.split(/\s*[,，、]\s*/);
+ if(items.length<2||items.length>20||(count!==null&&count!==items.length))return null;
+ // A numeric identity may have a uniform label on either side. Requiring one
+ // numeric key and identical wrappers prevents free prose from posing as data.
+ const itemPattern=new RegExp('^([\\p{L}]{0,16})\\s*('+num+')\\s*([\\p{L}]{0,16})$','u');
+ const operands=items.map(item=>itemPattern.exec(item.trim()));
+ if(operands.some(item=>!item||!finite(item[2])||effect.test(item[0])))return null;
+ if(operands.some(item=>item[1]!==operands[0][1]||item[3]!==operands[0][3]))return null;
+ const output=/^(?:(?:不要|无需|不必)补充说明|(?:只|仅)(?:输出|返回|给出)(?:结果|答案)|(?:return|output|give)\s+only\s+(?:the\s+)?(?:result|answer)|(?:no|without)\s+(?:additional\s+)?explanation|(?:reply|respond)\s+(?:here|in\s+chat)\s+only)$/i;
+ if(!parts.every(part=>output.test(ask(part))))return null;
+ const order=/从小到大|升序|ascending/i.test(zh?zh[1]:en[2])?'ascending':'descending';
+ return {kind:'supplied-numeric-sort',instructionText:'在聊天按明确数字顺序排列已完整给定的有限列表',
+  inputCount:items.length,chatOnly:true,authority:'advisory-only',
+  numericList:{operation:'sort',order,delivery:'chat',items:operands.map(item=>({text:item[0],key:Number(item[2])}))}};
+}
+
 function quantityBalance(raw){
  // Only a first-person ongoing activity can introduce background. A request
  // such as “请设计…” remains an action and cannot be removed by this projection.
@@ -65,5 +111,5 @@ function quantityBalance(raw){
 export function closedChatTask(raw){
  raw=String(raw||'').trim();
  if(!raw||raw.length>1200||/```|[\uE000-\uE101]/.test(raw)||highStakes.test(raw))return null;
- return quotedDiscussion(raw)||numericStatistics(raw)||quantityBalance(raw);
+ return quotedDiscussion(raw)||numericStatistics(raw)||numericSort(raw)||quantityBalance(raw);
 }
