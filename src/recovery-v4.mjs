@@ -263,10 +263,11 @@ export function useFastPath(assessment, options, recovery) {
   // The complete list grammar has already consumed its literal operands and
   // every prohibition. Neither a quoted item nor a shared denied tool action
   // is a capability request; real tool instructions cannot obtain this witness.
-  const capabilityRequest=['list-presentation','supplied-text-formatting'].includes(closed?.kind)
+  const capabilityRequest=closed?.chatOnly
     ?{...assessment,activeText:closed.instructionText,activeClauses:[closed.instructionText]}:assessment;
   if(requestsNamedCapability(capabilityRequest,options))return false;
   const currentWork=currentWorkClauses(active.split('\n'));
+  if(currentWork.some(clause=>/^(?:(?:请|帮我|再|并|然后)\s*)*照做|(?:^|[，,;；\n]|\b(?:and|then)\b)\s*(?:please\s+)?email\b/i.test(clause)))return false;
   if(currentWork.some(clause=>/^(?:(?:请|先|再|然后|并且|并|帮我|直接)\s*)*(?:读取|读入|打开|扫描|访问|执行|运行|测试|发送|安装|删除|部署|发布)|^(?:please\s+)?(?:read|open|scan|access|execute|run|test|send|install|delete|deploy|publish)\b/i.test(clause)))return false;
   // 仓库 also names supplied stock in a quantity word problem. Preserve the
   // repository warning unless the existing bounded quantity grammar applies;

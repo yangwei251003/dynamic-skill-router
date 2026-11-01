@@ -1,4 +1,5 @@
 import {closedSuppliedProse} from './supplied-prose.mjs';
+import {closedChatTask} from './chat-task-closure.mjs';
 import {positiveRequestPrefix,sharedEnglishNegation} from './task-restrictions.mjs';
 // A small, no-I/O grammar for supplied-data transformations. A successful
 // parse is a closure witness, not permission to execute or discover anything.
@@ -325,6 +326,8 @@ export function closedSuppliedFormatting(raw) {
 }
 
 export function closedSuppliedTransformation(raw) {
+  const chat = closedChatTask(raw);
+  if (chat) return chat;
   const prose = closedSuppliedProse(raw);
   if (prose) return prose;
   const supplied = suppliedLiterals(String(raw || '').trim());
