@@ -46,6 +46,8 @@ report_outcome 请复用任务 routeId。缺少任务标识的记录只供审计
 
 `requestContext.rawQuery` 保留原文，`hostInterpretation` 分列宿主解释。`mode` 接受 plan/read/execute；plan/read、readOnly=true、networkForbidden=true、sourceScope、preserveInputs=true 和 allowedActions 只收紧，false/execute 不能取消已有约束。宿主可依据原文把其识别出的全任务来源和输入保护限制放入 invocationContext；这些字段不构成新的用户授权。显式 allowedActions 中不含 network 时，远程访问不在本次允许动作内；未提供列表时不凭缺省推断禁网。纯文本 context 仅在有卡/限制时附简短条件段。
 
+宿主确认原文同时限定给定资料和指定网站时，可传入 `invocationContext.sourceScopes: ["provided-only", "specified-site-only"]`。这些范围与单值 `sourceScope` 及原文识别到的限制取交集，空数组不能撤销已有约束。该数组只描述宿主已判断的限制，不证明原文判断或具体网址正确，不改变授权。阶段检索和恢复规划需重新传入并检查返回；旧 MCP 进程可能没有此输入字段，须先核对 schema，不能把提交了未知字段当作生效。
+
 `methodCandidates` 为 0–2 张可拒绝咨询卡；`taskMethods=false` 关闭，maxCards=0 也不选卡。无相关缺口时允许空，已有 fast 不读取目录。qualityProfile 的 economy/balanced/quality 只调整建议阅读预算和核验深度，默认旧预算不变，必要验收与安全约束不省略。
 
 反馈 `report_outcome` 可附真实 `modelId`、`observedAt` 与 `revoked`。后续路由用真实 `currentModel`；直接校准使用 `context.modelId` 与当前 `contentHashes`。只有已采用、有验证/用户证据、同模型和当前内容hash、90天内的独立观察参与有界校准。无日期/模型/当前hash、未来、过期、撤销和冲突仅保留审计，不是模型训练；测试中的固定时间与模型标识只是可复现fixture，不能冒充生产运行事实。

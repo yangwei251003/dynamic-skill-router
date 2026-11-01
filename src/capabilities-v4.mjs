@@ -133,10 +133,11 @@ export function discoverCapabilities(options = {}) {
 }
 
 const STOP = new Set('the a an to of in on for and or with by from is are it its this that these those use using tool tools mcp plugin plugins api server get list create update read write run execute return returns task tasks help useful available function request user support supports provides access part'.split(' '));
+const SINGULAR_S_WORDS = new Set('canvas alias atlas bias gas chaos cosmos ethos pathos lens news series species'.split(' '));
 const segmenter = new Intl.Segmenter('zh',{granularity:'word'});
 function terms(value) {
   const source = norm(value).replace(/https?:\/\/\S+/g,' ');
-  const result = (source.match(/[a-z][a-z0-9]+/g)||[]).filter(x=>!STOP.has(x)).map(x=>x.replace(/(ing|s)$/,'')).filter(x=>!STOP.has(x));
+  const result = (source.match(/[a-z][a-z0-9]+/g)||[]).filter(x=>!STOP.has(x)).map(x=>/(?:ss|us|is)$/.test(x)||SINGULAR_S_WORDS.has(x)?x:x.replace(/(ing|s)$/,'')).filter(x=>!STOP.has(x));
   for (const part of segmenter.segment(source)) if (/\p{Script=Han}/u.test(part.segment) && part.segment.length>=2) result.push(part.segment);
   const bridges = [
     [/数据库|postgres|sql|database/,['database']], [/原理图|电路|pcb|easyeda|schematic/,['circuit']],
@@ -196,6 +197,7 @@ const ARTIFACT_TYPES=[
   {kind:'artifact-edit:document',request:/文档|报告|\b(?:document|report)\b/i,purpose:/文档|报告|\b(?:document|report)\b/i},
   {kind:'artifact-edit:slides',request:/幻灯片|演示文稿|\bpptx?\b|\b(?:slides?|presentation)\b/i,purpose:/幻灯片|演示文稿|\bpptx?\b|\b(?:slides?|presentation)\b/i},
   {kind:'artifact-edit:spreadsheet',request:/表格|电子表格|\b(?:spreadsheet|excel)\b/i,purpose:/表格|电子表格|\b(?:spreadsheet|excel)\b/i},
+  {kind:'artifact-edit:bound-canvas',request:/(?:已绑定|绑定的|绑定至).{0,10}(?:白板|画布)|\bbound\s+(?:canvas|whiteboard)\b|\bartifactref\b/i,purpose:/\bbound\s+canvas\b/i},
   {kind:'artifact-edit:code',request:/代码|源码|代码库|配置文件|\b(?:source code|codebase|source files?|repository)\b/i,purpose:/代码|源码|代码库|配置文件|\b(?:source code|codebase|source files?|repository)\b/i},
 ];
 function semanticNeeds(assessment) {
@@ -555,6 +557,15 @@ function adviseCapabilitiesBase(assessment, options = {}) {
       const escaped=String(x).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
       return new RegExp(`(?:\\$|使用\\s*|调用\\s*|用\\s*|use\\s+|invoke\\s+)${escaped}(?=$|[^a-z0-9_-])`,'i').test(active);
     });
+    // JavaScript drawing on an HTML canvas is not an existing viewer-bound
+    // whiteboard. The artifact editor requires a supplied binding, whereas
+    // other independent spreadsheet/presentation work must remain eligible.
+    const boundCanvasEditor=/\b(?:viewer[- ]bound|existing\s+bound)\b/i.test(purpose)
+      &&/\b(?:spreadsheet|presentation)\b/i.test(purpose)&&/\bbound\s+canvas\b/i.test(purpose);
+    const htmlCanvasProgram=/(?:\bhtml\b.{0,25}\bcanvas\b|\bcanvas\b.{0,25}\bhtml\b|(?:浏览器|\bbrowser\b|\bjavascript\b).{0,30}\bcanvas\b)/i.test(active)
+      &&/(?:编写|开发|实现|制作|做|游戏|绘制|\b(?:write|build|create|implement|develop|game|draw)\b)/i.test(active);
+    const independentArtifact=/(?:表格|工作簿|电子表格|幻灯片|演示文稿|已绑定.{0,10}(?:白板|画布)|绑定的(?:白板|画布)|\b(?:spreadsheet|workbook|presentation|slides?|whiteboard|artifactref|bound canvas|xlsx|pptx)\b)/i.test(active);
+    if(!explicit&&boundCanvasEditor&&htmlCanvasProgram&&!independentArtifact)continue;
     // Sharing the word LaTeX does not make project creation relevant to a
     // compile-only task (or compiling relevant to an explanation/new project).
     if(!explicit&&latexPurpose.compile&&!semantics.some(n=>n.kind==='latex-compile'))continue;
@@ -649,6 +660,7 @@ function adviseCapabilitiesBase(assessment, options = {}) {
     }
     if(semantics.some(x=>x.kind==='latex-create-project'))gates.push('verify-new-project-destination-and-no-overwrite');
     if(semantics.some(x=>x.kind==='latex-create-document'))gates.push('verify-tex-document-path-and-dedicated-project-directory');
+    if(semantics.some(x=>x.kind==='artifact-edit:bound-canvas'))gates.push('verify-application-provided-bound-canvas-artifact-ref');
     if(semantics.some(x=>x.kind==='image-edit'||x.kind==='image-read'))gates.push('verify-required-image-input');
     if(semantics.some(x=>x.kind==='image-read')&&localImageOnly)gates.push('verify-local-image-path');
     if(semantics.some(x=>x.kind==='image-edit')&&/\bupload\b.{0,120}\b(?:attachment|image|photo|reference)\b|\b(?:attachment|image|photo|reference)\b.{0,120}\bupload\b/i.test(entry.description))gates.push('verify-external-input-transfer-and-access');

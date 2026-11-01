@@ -105,13 +105,14 @@ export function invocationConstraints(assessment={},options={}) {
   if(c.phase!==undefined&&!['auto','discovery','planning','design','implementation','validation','delivery'].includes(c.phase))throw new TypeError('Invalid invocationContext.phase');
   for(const key of ['readOnly','networkForbidden','preserveInputs'])if(c[key]!==undefined&&typeof c[key]!=='boolean')throw new TypeError('Invalid invocationContext.'+key);
   if(c.sourceScope!==undefined&&!['provided-only','specified-site-only'].includes(c.sourceScope))throw new TypeError('Invalid invocationContext.sourceScope');
+  if(c.sourceScopes!==undefined&&(!Array.isArray(c.sourceScopes)||c.sourceScopes.length>2||c.sourceScopes.some(scope=>!['provided-only','specified-site-only'].includes(scope))))throw new TypeError('Invalid invocationContext.sourceScopes');
   if(c.allowedActions!==undefined&&(!Array.isArray(c.allowedActions)||c.allowedActions.some(x=>typeof x!=='string')))throw new TypeError('allowedActions must be strings');
   const allowed=c.allowedActions===undefined?null:[...new Set(c.allowedActions)];
   const user=assessment.inferredConstraints||inferUserConstraints(assessment.rawText||assessment.activeText||'',assessment.activeText||'',assessment.activeClauses||[]);
   // Keep both independent restrictions. The legacy single field retains the
   // more restrictive supplied-source scope, while the array is the actual
   // intersection that the host must apply, independent of provenance order.
-  const sourceScopes=['provided-only','specified-site-only'].filter(scope=>user.sourceScope===scope||c.sourceScope===scope);
+  const sourceScopes=['provided-only','specified-site-only'].filter(scope=>user.sourceScope===scope||c.sourceScope===scope||list(c.sourceScopes).includes(scope));
   const sourceScopeIntersection=sourceScopes.length>1
     ?'Use only user-provided sources that also belong to the specified site. Check the original request and exact sources; if the intersection is empty or unclear, do not broaden it.'
     :null;

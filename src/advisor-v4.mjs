@@ -47,9 +47,15 @@ function softwareDiagnosticEvidence(text) {
   const codeRepair = /(?:修复|修正|纠正|\bfix\b|\brepair\b).{0,60}(?:代码|函数|程序|模块|脚本|\.[cm]?[jt]sx?\b)|(?:代码|函数|程序|模块|脚本|\.[cm]?[jt]sx?\b).{0,35}(?:修复|修正|纠正|\bfix\b|\brepair\b)/i.exec(text);
   return software && action ? action[0] : codeRepair ? codeRepair[0] : null;
 }
+// Regular plurals such as ideas, areas and photos still stem to their singular.
+// These common singular nouns are exceptions, not evidence of an s-plural.
+const SINGULAR_S_WORDS = new Set('canvas alias atlas bias gas chaos cosmos ethos pathos lens news series species'.split(' '));
 function token(value) {
   const normalized = norm(value).replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
   if (!normalized || STOP.has(normalized)) return '';
+  // An s is part of many singular words. A small exception list prevents
+  // collisions such as canvas/Canva without erasing ordinary plural recall.
+  if (/(?:ss|us|is)$/i.test(normalized)||SINGULAR_S_WORDS.has(normalized)) return STEM.get(normalized) || normalized;
   return STEM.get(normalized) || normalized.replace(/(ies|ing|ed|s)$/i, (ending) => ending === 'ies' ? 'y' : '');
 }
 const words = (value) => {
@@ -155,7 +161,9 @@ function capabilityHasTaskObject(capability, text, skill, clauses) {
     const identity = [skill.id, skill.nameZh, skill.name, skill.category, ...list(skill.aliases)].join(' ');
     const leadingSummary = String(skill.summaryZh || skill.description || '').slice(0, 350);
     if (!/(?:视觉|界面|网页|平面设计|排版|品牌设计|\b(?:visual|graphic|frontend|website|web|ui|ux)\b)/i.test(identity + ' ' + leadingSummary)) return true;
-    return /视觉|界面|网页|网站|\bui\b|\bux\b|前端|设计稿|设计系统|版式|排版|配色|字体|样式|品牌|图标|海报|插画|图表|幻灯片|\bpptx?\b|\bweb\b|website|graphic design|visual design/i.test(text);
+    const canvasGame=/(?:游戏|\bgames?\b)/i.test(text)&&/\bcanvas\b/i.test(text)
+      &&/(?:game\s+(?:ui|interface)|游戏界面)/i.test(leadingSummary);
+    return canvasGame||/视觉|界面|网页|网站|\bui\b|\bux\b|前端|设计稿|设计系统|版式|排版|配色|字体|样式|品牌|图标|海报|插画|图表|幻灯片|\bpptx?\b|\bweb\b|website|graphic design|visual design/i.test(text);
   }
   if (capability === 'image-production')
     return /图片|图像|照片|截图|插画|海报|图标|附图|这张图|这幅图|抠图|p图|去背景|\blogo\b|\b(?:images?|photos?|pictures?|screenshots?|illustrations?|posters?|icons?)\b|\.(?:png|jpe?g|webp|gif|bmp)\b|remove background/i.test(text);
@@ -261,7 +269,37 @@ function concreteTaskSupport(skill,capability,assessment) {
     &&/(?:分析|研究|评估|比较|对比|估值|\b(?:analy[sz]e|research|assess|compare|valuation)\b)/i.test(active);
   const financeManual=/(?:^|[^a-z])(?:financial|finance)[-_ ](?:suite|analysis|analyst)(?:$|[^a-z])|财务(?:分析|研究|评估)/i.test(identity)
     &&/(?:财务|财报|\b(?:financial|finance|cash flow)\b)/i.test(purpose);
-  return {skill:skillTask&&skillManual,codeTest:testTask&&testManual&&!testLanguageMismatch&&!testFrameworkMismatch,docx:docTask&&docManual,data:dataTask&&dataManual,research:researchTask&&researchManual,stock:stockTask&&stockManual&&!aShareOnly,finance:financeTask&&financeManual,testLanguageMismatch,testFrameworkMismatch};
+  // Map an evidence-seeking action to a general source-verification manual,
+  // rather than treating the named subject (for example speech) as the task.
+  const explanationOnly=/^\s*(?:(?:请|帮我|please|只是|仅仅|仅需|只需)\s*)*(?:解释|介绍|说明|讲解|简述|阐述|科普|什么是|讨论是否|评估是否|如何|是否|explain\b|describe\b|what\s+is\b|whether\b|how\s+to\b|should\b)/i.test(active);
+  const sourcedResearchTask=!explanationOnly&&/(?:对比|比较|调研|研究|考察|调查|\b(?:compare|evaluate|investigate|research|assess)\b)/i.test(active)
+    &&/(?:官方(?:文档|资料|来源|网站)|一手(?:资料|来源)|原始来源|许可条款|实际许可|\b(?:official\s+(?:docs?|documentation|sources?|websites?)|primary\s+sources?|licen[cs]e\s+terms)\b)/i.test(active)
+    &&!assessment.inferredConstraints?.networkForbidden&&assessment.inferredConstraints?.sourceScope!=='provided-only';
+  const generalResearchManual=capability==='research'
+    &&/(?:^|[^a-z])deep[-_ ]research(?:$|[^a-z])/i.test(identity)
+    &&/(?:source|evidence|reference|citation|来源|证据)/i.test(purpose);
+  const canvasGameTask=!explanationOnly&&/(?:游戏|\bgames?\b)/i.test(active)&&/\bcanvas\b/i.test(active)
+    &&/(?:做|制作|开发|创建|编写|实现|\b(?:build|create|make|implement|develop)\b)/i.test(active);
+  const canvasGameManual=/(?:game\s+(?:ui|interface)|游戏界面)/i.test(purpose)
+    &&/(?:frontend|web|interface|ui|前端|界面|网页)/i.test(identity+' '+purpose);
+  const accessibilityTask=!explanationOnly&&/(?:创建|制作|开发|实现|改进|审计|修复|\b(?:build|create|implement|improve|audit|fix|make)\b)/i.test(active)
+    &&/(?:可访问性|无障碍|\b(?:accessible|accessibility|a11y|wcag|screen reader|keyboard navigation)\b)/i.test(active)
+    &&/(?:网页|页面|界面|表格|\b(?:web|website|page|ui|table|interactive|visuali[sz]er)\b)/i.test(active);
+  const canvasDocTask=!explanationOnly&&/\bjson\s+canvas\b|\.canvas\b/i.test(active)
+    &&/(?:创建|制作|整理成|整理为|交付|输出|生成|编辑|修改|修复|增加|构建|检查|查看|读取|解析|审查|\b(?:create|make|edit|build|deliver|export|inspect|read|review)\b)/i.test(active);
+  const canvasDocManual=/\bjson\s+canvas\b/i.test(purpose)&&/(?:nodes?|edges?|连接|节点)/i.test(purpose);
+  const videoSource=/(?:视频|影片|录像|\bvideo\b|\.(?:mp4|mov|mkv|webm|avi|m4v)\b)/i;
+  const transcriptAction=/(?:转写|转录|听写|转成文字|转换为文字|\b(?:transcribe|transcription|speech.to.text)\b)/i;
+  // Keep independent media work separated: transcribing another audio file
+  // does not mean transcribing the mentioned video. A short anaphor may refer
+  // to the immediately preceding video only when no other audio file is named.
+  const mediaClauses=list(assessment.activeClauses).flatMap(clause=>clause.split(/(?:并且|然后|接着|同时|以及|并|\band then\b|\band\b)/i)).map(clause=>clause.trim()).filter(Boolean);
+  const videoTranscriptionTask=!explanationOnly&&mediaClauses.some((clause,i)=>transcriptAction.test(clause)
+    &&(videoSource.test(clause)||(i>0&&/(?:其中|其(?:中|音轨|声音|人声)|它|该视频|这段|\b(?:the same video|its audio)\b)/i.test(clause)
+      &&videoSource.test(mediaClauses[i-1])&&!/\.(?:mp3|wav|m4a|flac|aac|ogg)\b/i.test(clause))));
+  const videoTranscriptionManual=/(?:local\s+video|video\s+url|本地视频|视频链接)/i.test(purpose)
+    &&/(?:transcri(?:ption|be)|captions?|转写|字幕|语音识别)/i.test(purpose);
+  return {skill:skillTask&&skillManual,codeTest:testTask&&testManual&&!testLanguageMismatch&&!testFrameworkMismatch,docx:docTask&&docManual,data:dataTask&&dataManual,research:researchTask&&researchManual,sourceResearch:sourcedResearchTask&&generalResearchManual,canvasGame:canvasGameTask&&canvasGameManual,accessibility:accessibilityTask&&capability==='accessibility',canvasDoc:canvasDocTask&&canvasDocManual,videoTranscription:videoTranscriptionTask&&videoTranscriptionManual,stock:stockTask&&stockManual&&!aShareOnly,finance:financeTask&&financeManual,testLanguageMismatch,testFrameworkMismatch};
 }
 
 function retrievalTerms(text, experimental = false) {
@@ -634,7 +672,7 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
   // a concrete object. Keep exact names, specific triggers and independently
   // supported action/object pairs, including short requests.
   const concrete=concreteTaskSupport(skill,capability,assessment);
-  const concretePair=concrete.skill||concrete.codeTest||concrete.docx||concrete.data||concrete.research||concrete.stock||concrete.finance;
+  const concretePair=concrete.skill||concrete.codeTest||concrete.docx||concrete.data||concrete.research||concrete.sourceResearch||concrete.canvasGame||concrete.accessibility||concrete.canvasDoc||concrete.videoTranscription||concrete.stock||concrete.finance;
   const substantiveHit=scoreableHits.some(hit=>!weakEvidence(hit.term)
     && (!/^[\p{Script=Han}]+$/u.test(hit.term)||retrieval.queryWords!==null));
   const specificTrigger=triggerHits.some(term=>!weakEvidence(term)
@@ -643,6 +681,11 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
   if(!explicit&&!serviceName&&!diagramObject&&!diagnosticNameMatch&&!agentInstructionSupported
       &&!specificDomain&&!specificTrigger&&!substantiveHit&&!concretePair)score=0;
   if(!explicit&&concretePair&&taskObjectCompatible&&score<20)score=20;
+  const recognitionTask=/(?:语音识别|语音转(?:写|文字)|\bspeech\s+recognition\b|\bautomatic\s+speech\s+recognition\b|\bspeech.to.text\b)/i.test(active);
+  const voiceOutputTask=/(?:配音|旁白|语音合成|朗读|\b(?:voiceover|narration|text.to.speech|spoken audio)\b)/i.test(active);
+  const speechSynthesisOnly=/^(?:generate|create|produce)\s+spoken\s+audio\s+from\s+text\b/i.test(String(skill.summaryZh||skill.description||'').trim())
+    &&!/(?:speech recognition|speech.to.text|语音识别|转写)/i.test(String(skill.summaryZh||skill.description||''));
+  if(!explicit&&recognitionTask&&!voiceOutputTask&&speechSynthesisOnly)score=0;
   if(!explicit&&(concrete.testLanguageMismatch||concrete.testFrameworkMismatch))score=0;
   if(!explicit&&financeSpecialistWithoutObject(skill,active))score=0;
   if(!explicit&&restrictedGitDelivery(skill)&&!gitDeliveryIntent(active))score=0;
@@ -654,6 +697,11 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
   if (triggerHits.length) reasons.push(`matched task signal: ${triggerHits[0]}`);
   if (diagramObject && taskObjectCompatible) reasons.push(`explicit diagram creation matches manual object: ${diagramObject}`);
   if (agentInstructionSupported) reasons.push('task explicitly requests writing instructions for an AI agent');
+  if (concrete.sourceResearch) reasons.push('source-based comparison aligns with a general research manual');
+  if (concrete.canvasGame) reasons.push('interactive canvas game aligns with the manual game interface purpose');
+  if (concrete.accessibility) reasons.push('requested accessible interface aligns with accessibility manual');
+  if (concrete.canvasDoc) reasons.push('requested JSON Canvas document aligns with its manual');
+  if (concrete.videoTranscription) reasons.push('video transcription aligns with a manual that supports video input and transcription');
   if (serviceName) reasons.push(`literal service name in task and skill: ${serviceName}`);
   if (formatCorroborated) reasons.push('requested file extension is corroborated by an independent skill identity match');
   const explainedHits = scoreableHits;
@@ -666,6 +714,24 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
   const evidence = matchedPhrase ? [{kind: triggerHits.length ? 'trigger' : explicit ? 'explicit' : serviceName ? 'service-name' : inference ? 'inferred-description' : 'description', phrase: matchedPhrase,
     querySignal: inference?.evidence || null,
     clauseIndex, snippet: clauseIndex >= 0 ? assessment.activeClauses[clauseIndex].slice(0, 160) : active.slice(0, 160)}] : [];
+  // Purpose matches must cite continuous user text, even when the relevant
+  // manual uses another language and no lexical identity term overlapped.
+  const purposeSignals=[
+    [concrete.canvasGame,/(?:游戏|\bgames?\b)/i],
+    [concrete.canvasGame,/\bcanvas\b/i],
+    [concrete.sourceResearch,/(?:官方(?:文档|资料|来源|网站)|一手(?:资料|来源)|原始来源|许可条款|实际许可|\b(?:official\s+(?:docs?|documentation|sources?|websites?)|primary\s+sources?|licen[cs]e\s+terms)\b)/i],
+    [concrete.accessibility,/(?:可访问性|无障碍|\b(?:accessible|accessibility|a11y|wcag|screen reader|keyboard navigation)\b)/i],
+    [concrete.canvasDoc,/\bjson\s+canvas\b|\.canvas\b/i],
+    [concrete.videoTranscription,/(?:视频|影片|录像|\bvideo\b|\.(?:mp4|mov|mkv|webm|avi|m4v)\b)/i],
+    [concrete.videoTranscription,/(?:转写|转录|听写|转成文字|转换为文字|\b(?:transcribe|transcription|speech.to.text)\b)/i],
+  ];
+  for(const [enabled,pattern] of purposeSignals)if(enabled){
+    const i=list(assessment.activeClauses).findIndex(clause=>pattern.test(clause));
+    const snippet=i>=0?assessment.activeClauses[i]:active;
+    const match=pattern.exec(snippet);
+    if(match&&!evidence.some(item=>norm(item.phrase)===norm(match[0])))
+      evidence.unshift({kind:'task-purpose',phrase:match[0],querySignal:null,clauseIndex:i,snippet:snippet.slice(0,160)});
+  }
   return {skill, score, explicit, capability, phase, reasons, availability, evidence, serviceName};
 }
 

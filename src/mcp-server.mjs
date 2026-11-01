@@ -38,7 +38,7 @@ const runtimeToolSchema = z.object({name:z.string().min(1),description:z.string(
 const capabilityFields = {
   runtimeTools:z.array(runtimeToolSchema).max(3000).optional().describe('当前会话工具清单；提供真实名称、用途和可证实的插件来源。不能用配置推断可调用。'),
   runtimePlugins:z.array(z.object({id:z.string().min(1),name:z.string().optional(),description:z.string().max(4000).optional(),enabled:z.boolean().optional(),skills:z.array(z.string()).optional()})).max(500).optional(),
-  invocationContext:z.object({mode:z.enum(['plan','read','execute']).optional(),readOnly:z.boolean().optional(),networkForbidden:z.boolean().optional(),sourceScope:z.enum(['provided-only','specified-site-only']).optional(),preserveInputs:z.boolean().optional(),allowedActions:z.array(z.string()).optional(),phase:z.enum(['auto','discovery','planning','design','implementation','validation','delivery']).optional()}).optional(),
+  invocationContext:z.object({mode:z.enum(['plan','read','execute']).optional(),readOnly:z.boolean().optional(),networkForbidden:z.boolean().optional(),sourceScope:z.enum(['provided-only','specified-site-only']).optional(),sourceScopes:z.array(z.enum(['provided-only','specified-site-only'])).max(2).optional().describe('宿主根据完整原文确认的额外全任务来源限制；所有条目必须同时满足，既不替代原文也不扩大授权。阶段检索需重新传入。'),preserveInputs:z.boolean().optional(),allowedActions:z.array(z.string()).optional(),phase:z.enum(['auto','discovery','planning','design','implementation','validation','delivery']).optional()}).optional(),
   capabilityLimit:z.number().int().min(1).max(10).optional(),
 };
 const recoveryFields={
