@@ -715,6 +715,18 @@ function bindOperation(entry,purpose,op,facets) {
     matches:matches.map(({facet,objects})=>({index:facet.index,source:facet.source,text:facet.text,actions:facet.actions,location:facet.location,matchedObjects:objects}))};
 }
 
+function deviceOperationScope(entry,purpose,restrictions) {
+  const device='(?:设备|控制器|PLC|硬件|\\bdevices?\\b|\\bcontrollers?\\b|\\bequipment\\b|\\bhardware\\b)';
+  const concrete=primaryPurpose(purpose),actions=[];
+  if(new RegExp('^(?:连接|connect\\b).{0,100}'+device,'i').test(concrete))actions.push('connect');
+  if(new RegExp('^(?:下载|download\\b).{0,100}(?:到|至|\\bto\\b|\\bonto\\b).{0,45}'+device,'i').test(concrete))actions.push('download');
+  const blocked=restrictions.some(x=>list(x.actions).some(action=>actions.includes(action)));
+  const named=entry.name.replace(/[_-]/g,' ');
+  const uncertain=capabilityRole(purpose)==='local-execution'
+    || new RegExp(device,'i').test(named+' '+concrete)&&/连接|下载|\b(?:connect|download)\b/i.test(named+' '+concrete);
+  return {blocked,uncertain};
+}
+
 function capabilityGates({assessment,entry,op,scopedReadOnly,phase,networkForbidden,network,discovery,role,specialistNeeds,purpose,preserveRestrictionDecision=false}) {
   let score=0;
   const needsDelivery = op.phase==='delivery';
@@ -752,7 +764,24 @@ function capabilityGates({assessment,entry,op,scopedReadOnly,phase,networkForbid
     if(network==='network'){decision='skip';gates.push('remote-browser-not-authorized-for-local-target');}
     else if(!(discovery?.supportsLocal || network==='local')&&decision!=='skip'){decision='defer';gates.push('verify-local-browser-target-support-before-invocation');}
   }
-  return {decision,gates,protectedScopes,scoreAdjustment:score};
+  const operationRestrictions=list(assessment.restrictions?.forbiddenOperations).filter(x=>x?.scope==='device-operations'&&typeof x.clause==='string');
+  const unresolvedConstraints=list(assessment.restrictions?.unresolvedConstraints).filter(x=>typeof x?.clause==='string');
+  let scopeInstruction=null;
+  if(entry.kind==='tool'&&operationRestrictions.length){
+    const deviceScope=deviceOperationScope(entry,purpose,operationRestrictions);
+    if(deviceScope.blocked){
+      decision='skip';gates.push('device-operation-forbidden');
+      scopeInstruction='当前请求禁止该设备连接或下载操作；保留离线检查范围';
+    }else if(deviceScope.uncertain){
+      gates.push('verify-device-operation-scope-before-invocation');
+      if(decision==='use-now')decision='check-scope';
+    }
+  }
+  if(unresolvedConstraints.length){
+    gates.push('resolve-unclassified-user-constraint-before-invocation');
+    if(decision==='use-now')decision='check-scope';
+  }
+  return {decision,gates,protectedScopes,operationRestrictions,unresolvedConstraints,scopeInstruction,scoreAdjustment:score};
 }
 
 function structuredRole(purpose) {
@@ -868,6 +897,9 @@ function addStructuredCandidates(cards,assessment,options,inventory,purposes,pha
             currentObservation:entry.currentObservation,
             ...(entry.callabilityEvidence?{callabilityEvidence:entry.callabilityEvidence}:{})};
           existing.gates=unique([...existing.gates,...gate.gates]);
+          if(gate.operationRestrictions.length)existing.operationRestrictions=gate.operationRestrictions;
+          if(gate.unresolvedConstraints.length)existing.unresolvedConstraints=gate.unresolvedConstraints;
+          if(gate.scopeInstruction)existing.when=gate.scopeInstruction;
           continue;
         }
         cards.push({id:entry.id,kind:'tool',name:entry.name,plugin:entry.plugin||null,server:entry.server||null,
@@ -878,10 +910,12 @@ function addStructuredCandidates(cards,assessment,options,inventory,purposes,pha
             runtimeAvailable:entry.runtimeAvailable??null,configurationEnabled:entry.configurationEnabled??null,
             configurationConflict:entry.configurationConflict===true,currentObservation:entry.currentObservation,
             ...(entry.callabilityEvidence?{callabilityEvidence:entry.callabilityEvidence}:{})},
-          decision:gate.decision,phase:op.phase,when:'按当前用户请求核对具体输入、范围、效果和阶段后，由宿主决定是否调用',
+          decision:gate.decision,phase:op.phase,when:gate.scopeInstruction||'按当前用户请求核对具体输入、范围、效果和阶段后，由宿主决定是否调用',
           expectedBenefit:request.purpose,effect:op.effect,gates:gate.gates,
           objectBindings:binding.matches,scopeReadOnly:scopedReadOnly,
           ...(gate.protectedScopes.length?{protectedScopes:gate.protectedScopes}:{}),
+          ...(gate.operationRestrictions.length?{operationRestrictions:gate.operationRestrictions}:{}),
+          ...(gate.unresolvedConstraints.length?{unresolvedConstraints:gate.unresolvedConstraints}:{}),
           ...(networkForbidden?{networkScope:{forbidden:true,purposeEvidence:network}}:{}),
           invocation:{tool:entry.name,argumentPolicy:'Use the observed host schema and authorized task inputs.',executor:'host-agent',automaticallyExecuted:false},
           reason:'宿主声明的能力缺口匹配当前真实工具；该建议不等于用户点名、授权或认证'});
@@ -1072,7 +1106,7 @@ export function adviseCapabilities(assessment, options = {}) {
     const specialist=['revision','comment','shader','motion','animation','row','range','table','toolbar','generative','deck','video','job','progress','latex','module','reset','asset','paper','developer','thread','dependency','metadata','profile','handoff','usage','worktree','session','account','model','weave','folder'];
     if(!explicit&&!fillsSubstrate&&nameTerms.some(t=>specialist.includes(t)&&!queryTerms.has(t)))continue;
     score+=nameTerms.filter(t=>specialist.includes(t)&&queryTerms.has(t)).length*12;
-    const {decision,gates,protectedScopes,scoreAdjustment}=capabilityGates({assessment,entry,op,scopedReadOnly,phase,networkForbidden,network,discovery,role,specialistNeeds,purpose});
+    const {decision,gates,protectedScopes,operationRestrictions,unresolvedConstraints,scopeInstruction,scoreAdjustment}=capabilityGates({assessment,entry,op,scopedReadOnly,phase,networkForbidden,network,discovery,role,specialistNeeds,purpose});
     score+=scoreAdjustment;
     cards.push({id:entry.id,kind:entry.kind,name:entry.name,plugin:entry.plugin || null,server:entry.server || null,
       description:purpose.slice(0,240),score,explicit,providerRequested:providerMentioned,matchedTerms:shared.slice(0,6),needMatches,
@@ -1081,7 +1115,7 @@ export function adviseCapabilities(assessment, options = {}) {
       ...(discovery?{discoveryEvidence:{sourceId:discovery.sourceId,purpose:discovery.purpose,scope:'functional-discovery-only; callability, authentication and effects unverified'}}:{}),
       availability:{discovered:true,enabled:entry.enabled,callable:entry.callable,evidence:entry.evidence,
         ...(entry.runtimeAvailable!==undefined?{runtimeAvailable:entry.runtimeAvailable,configurationEnabled:entry.configurationEnabled,configurationConflict:entry.configurationConflict}:{})},
-      decision,phase:op.phase,when:networkForbidden&&network==='network'?'当前请求禁止联网，不能调用此联网能力':networkForbidden&&network==='unknown'?'先核对准确 schema 与输入，确认不会联网后再评估调用；确认前暂缓':scopedReadOnly && op.effect==='unknown' && entry.kind==='tool'?'先核对准确 schema 与输入，确认无写入效果后再评估调用；确认前暂缓':decision==='defer'?'仅到相应阶段且用户目标需要时再评估':decision==='discover-first'?'先按需发现工具或读取相关技能，确认当前会话可用':`当前 ${phase} 阶段，且缺少其能提供的结果时`,
+      decision,phase:op.phase,when:scopeInstruction||(networkForbidden&&network==='network'?'当前请求禁止联网，不能调用此联网能力':networkForbidden&&network==='unknown'?'先核对准确 schema 与输入，确认不会联网后再评估调用；确认前暂缓':scopedReadOnly && op.effect==='unknown' && entry.kind==='tool'?'先核对准确 schema 与输入，确认无写入效果后再评估调用；确认前暂缓':decision==='defer'?'仅到相应阶段且用户目标需要时再评估':decision==='discover-first'?'先按需发现工具或读取相关技能，确认当前会话可用':`当前 ${phase} 阶段，且缺少其能提供的结果时`),
       ...(networkForbidden?{networkScope:{forbidden:true,purposeEvidence:network}}:{}),
       expectedBenefit:recordRead?.purpose || (role==='local-execution'&&fillsSubstrate&&substrateNeeds.localExecutionEvidence.length
         ? `核对本地执行入口以完成这些用户操作：${substrateNeeds.localExecutionEvidence.join('；')}`
@@ -1089,6 +1123,8 @@ export function adviseCapabilities(assessment, options = {}) {
       objectBindings:binding.matches,scopeReadOnly:scopedReadOnly,
       ...(role==='local-execution'&&fillsSubstrate?{operationEvidence:substrateNeeds.localExecutionEvidence.map(clause=>({source:'user-request',clause,scope:'advisory-only; exact command and effects require host verification'}))}:{}),
       ...(protectedScopes.length?{protectedScopes}:{}),
+      ...(operationRestrictions.length?{operationRestrictions}:{}),
+      ...(unresolvedConstraints.length?{unresolvedConstraints}:{}),
       invocation:{tool:entry.kind==='tool'?entry.name:null,argumentPolicy:'Use the host tool schema and actual task inputs; do not invent parameters.',executor:'host-agent',automaticallyExecuted:false},
       reason:explicit?'用户在当前任务中点名此能力':fillsSubstrate?`任务需要 ${role}，该工具的具体用途可补足此缺口；输入及效果仍须核对`:`任务与能力共有具体信号：${shared.slice(0,4).join('、')}`});
   }

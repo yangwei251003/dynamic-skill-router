@@ -57,7 +57,7 @@ const COMPONENT_BUILD = /(?:编写|实现|制作|创建|开发).{0,40}(?:工具|
 const COMPONENT_RULE = /只读(?:工具|接口|服务)|(?:工具|服务|接口)运行时|\bread[- ]only\s+(?:tool|endpoint|service|api)|\b(?:tool|service|endpoint)\s+(?:must|should|runtime)/i;
 const SEMANTIC_INVARIANT = /(?:不(?:要)?|不得|禁止)(?:改变|修改|更改|改动)(?:其|原有的?|原来的?)?(?:含义|语义|意思|行为|逻辑|风格|接口|签名)|\b(?:do not|don't|without)\s+chang\w*\s+(?:(?:the|its|their|existing)\s+)*(?:meaning|semantics|behaviou?r|logic|style|interface|signature|api)\b/gi;
 const optOut = value => String(value).replace(/(?:不要求|无需|不必)(?:保持)?只读|不禁止(?:改|修改|编辑)[^，。；\n]*|\b(?:not|no longer)\s+(?:be\s+)?read[- ]only\b/gi,'');
-const PROSE_REQUEST=/^\s*(?:(?:请|先|再|帮我|直接|\bplease\b)\s*)*(?:指出|列出|给出|提出|说明|解释|描述|建议|\b(?:identify|list|give|describe|explain|suggest|recommend)\b|提供(?=.{0,30}(?:建议|清单|说明|分析))|\bprovide\b(?=.{0,40}\b(?:advice|suggestions?|recommendations?|analysis|list)\b))/i;
+const PROSE_REQUEST=/^\s*(?:(?:请|先|再|帮我|直接|\bplease\b)\s*)*(?:指出|列出|给出|提出|说明|解释|描述|建议|给(?=.{0,40}(?:建议|清单|说明|分析|诊断|结论))|\b(?:identify|list|give|describe|explain|suggest|recommend)\b|提供(?=.{0,30}(?:建议|清单|说明|分析))|\bprovide\b(?=.{0,40}\b(?:advice|suggestions?|recommendations?|analysis|list)\b))/i;
 const CHAT_SPEECH=/(?:在|于)(?:本次|当前)?(?:这里|聊天|对话)(?:中|里)?(?:把.{0,45})?(?:返回|回复|回答|答复|归纳|概括|总结|解释|说明|区分|给出|给|列出|列|拆|判断|交付|输出|呈现|写)|(?:列|写|显示|输出|呈现)(?:出)?(?:在|到)(?:本次|当前)?(?:这里|聊天|对话)(?:中|里)?|\b(?:list|display|show|present|return|output|reply|respond|answer|explain|summari[sz]e|report)\b.{0,80}\bin\s+(?:(?:(?:the|this|current)\s+)?chat|your\s+reply\s+here)\b|^(?:(?:please|only)\s+)*(?:reply|respond|answer)\s+here(?:\s+only)?$/i;
 
 function negativeActionItems(clause) {
@@ -90,6 +90,27 @@ function forbidsNetwork(clause) {
    || /^(?:请)?(?:全程)?离线(?:完成|处理|执行|工作)?$|^(?:no network(?: access)?|offline only|(?:do not|don't|never) (?:access the (?:internet|network)|go online))$/i.test(clause.trim());
 }
 
+// A prohibition on a generic physical target is not a ban on public research.
+// Named/ambiguous targets remain unresolved rather than widening to all devices.
+function forbiddenDeviceOperations(clause) {
+  const actions=[],targets=[];
+  for(const item of negativeActionItems(clause)){
+    const match=item.match(/^(?:(?:再|实际)?(连接|下载)|(?:directly\s+)?(connect|download)\b)\s*(.*)$/i);
+    if(!match)return null;
+    const action=/^(?:连接|connect)$/i.test(match[1]||match[2])?'connect':'download';
+    const tail=match[3].trim();actions.push(action);
+    // Bare coordinated verbs may share the final object. A qualified object
+    // must survive intact for host review; never keep only its noun suffix.
+    if(!tail||/^(?:到|至|to)$/i.test(tail))continue;
+    const object=action==='connect'?tail.replace(/^(?:到|至|to\b)\s*/i,''):
+      tail.match(/(?:到|至|\b(?:to|onto|into)\b)\s*(.+)$/i)?.[1];
+    const target=object?.replace(/^(?:the|a|an)\s+/i,'').trim();
+    if(!target||!/^(?:设备|控制器|PLC|硬件|devices?|controllers?|equipment|hardware)$/i.test(target))return null;
+    targets.push(target);
+  }
+  return actions.length&&targets.length?{scope:'device-operations',actions:[...new Set(actions)],target:targets.at(-1),clause}:null;
+}
+
 // Creation and edits are already requested user work. A protected source does
 // not require the user to repeat “new/separate” for every output format or path.
 // Mere host interpretation and a request for a chat answer cannot establish it.
@@ -102,6 +123,9 @@ export function currentWorkClauses(clauses) {
   return PROSE_REQUEST.test(text)||CHAT_SPEECH.test(text)?text.split(/并且|然后|同时|而且|且|并|\band\b|\bthen\b/i):[text];
  }).map(raw=>{
   let clause=String(raw).replace(/(?:已经?|曾经|之前|过去|原来|先前|去年)(?:创建|生成|制作|编写|开发|实现|修改|编辑|修复|保存|导出|更新|发送|上传|分享|发布|部署|安装|卸载|启用|停用|注册|购买|下单|删除|重命名)(?:了|的|过)?/g,'');
+  // “导出的金额” describes an existing result; a later independent imperative
+  // such as “修改这些导出的金额” retains its governing mutation verb.
+  clause=clause.replace(new RegExp('(?:'+MUTATION_ZH+')(?:了|过)?的','g'),'的');
   // An explanatory subordinate clause describes an action; it does not request
   // that action. A later separate imperative remains in its own source clause.
   const explanation=clause.search(/(?:解释|说明|介绍|讲解|描述)(?:一下)?(?:如何|怎么|怎样|为什么|能否|是否)|\b(?:explain|describe|discuss)\s+(?:how|why|whether)\b/i);
@@ -163,7 +187,10 @@ function restrictionTarget(clause) {
   // A Chinese object can precede the exclusive read predicate. The explicit
   // current-task relation above has already been handled separately.
   const exclusiveRead=/(?:只|仅)(?:允许|能)?/.exec(clause);
-  if(exclusiveRead&&exclusiveRead.index>0&&READ.test(clause))return clause.slice(0,exclusiveRead.index).trim();
+  if(exclusiveRead&&exclusiveRead.index>0&&READ.test(clause)){
+    const before=clause.slice(0,exclusiveRead.index).replace(/^(?:(?:请|先|再|然后|帮我|严格)\s*)+/,'').trim();
+    if(before)return before;
+  }
   const target=clause.match(/(?:修改|改动|改变|改写|写入|更改|变更|编辑|保存|删除|覆盖|重命名|改(?:任何)?文件|改|写|读取|查看|检查|审查|观察|检索|搜索|查询|搜|\b(?:modif\w*|mutat\w*|chang\w*|writ\w*|edit\w*|delet\w*|overwrit\w*|sav\w*|renam\w*|read|inspect|review|check|search)\b)\s*(.*)$/i)?.[1]?.trim();
   if(!target){
     // Chinese also puts the protected object before its negative predicate.
@@ -179,6 +206,8 @@ function restrictionTarget(clause) {
 // not erase the former. A separately requested artifact still keeps its scope.
 function readOnlyOperation(clause) {
  clause=operationWithoutLocation(clause).trim();
+  if(/^(?:(?:请|先|再|然后|帮我|严格)\s*)*(?:只|仅)(?:允许|能)?(?:查看|检查|审查|审阅|审核|核验|读取|读回|观察|诊断|评估|搜索|检索|查询)/.test(clause)
+    || /^(?:(?:please|first|then)\s+)*only\s+(?:inspect|review|audit|check|read|search|look up)\b/i.test(clause))return true;
  // Bare Chinese 只读 can be the read predicate itself when it directly governs
  // a concrete resource token. This is distinct from a source adjective such as
  // “原文件只读”. Resource placeholders (.csv) survive the input projection.
@@ -210,6 +239,7 @@ export function assessRestrictions(userClauses, hostConstraints = [], invocation
   const inputs=[{source:'user-request',text:userClauses},...hostConstraints.map(text=>({source:'host-restriction',text}))];
   const evidence=[];
   const networkEvidence=[];
+  const forbiddenOperations=[],unresolvedConstraints=[];
   // A shared negative governs its coordinated actions (“不改原文或新建文件”).
   // Only an explicit contrast starts a fresh affirmative request.
   const workClauses=(activeClauses||sharedEnglishNegation(userClauses).split(/[\n。；;，,]+|\.(?=\s|$)/))
@@ -250,7 +280,10 @@ export function assessRestrictions(userClauses, hostConstraints = [], invocation
         continue;
       }
       const clause=part.trim();if(!clause)continue;
-      if(forbidsNetwork(clause))networkEvidence.push({source:input.source,scope:'network-access',clause});
+      const networkRestricted=forbidsNetwork(clause);
+      if(networkRestricted)networkEvidence.push({source:input.source,scope:'network-access',clause});
+      const deviceRestriction=forbiddenDeviceOperations(clause);
+      if(deviceRestriction)forbiddenOperations.push({source:input.source,...deviceRestriction});
       const priorTarget=adjacentProtectedTarget;adjacentProtectedTarget=null;
       const check=clause.replace(SEMANTIC_INVARIANT,'');
       const chatOnly=/(?:只|仅)(?:在聊天(?:中)?|用文字)(?:回复|回答|报告|解释|给出)|\b(?:reply|answer|respond)\b.{0,20}\b(?:in chat|with text) only\b/i.test(check);
@@ -258,7 +291,11 @@ export function assessRestrictions(userClauses, hostConstraints = [], invocation
       const reverseProhibition=globalWriteLimit||/\b(?:all|any)\s+(?:writes?|mutations?|modifications?|changes?)\s+(?:is|are)\s+(?:forbidden|prohibited|disallowed)\b|(?:禁止|不得)(?:一切|任何|所有)(?:写入|修改|改动)/i.test(check);
       const postfixRead=check.match(/\b(?:inspect|review|audit|check|read|search)\s+([^.;,\n]{1,80})\s+only\b/i);
       const boundedRead=postfixRead&&!/\b(?:write|create|generate|save|edit|modify|delete|upload|publish)\b/i.test(postfixRead[1]);
-      if(!READ.test(check)&&!NO_WRITE.test(check)&&!reverseProhibition&&!boundedRead&&!chatOnly)continue;
+      if(!READ.test(check)&&!NO_WRITE.test(check)&&!reverseProhibition&&!boundedRead&&!chatOnly){
+        if(!deviceRestriction&&!networkRestricted&&negativeRequestPattern.test(check))
+          unresolvedConstraints.push({source:input.source,clause,scope:'unresolved',basis:'negative-request-needs-host-scope-check'});
+        continue;
+      }
       // Scope is established by the protected object itself. It must not depend
       // on successfully recognizing the verb used for a different deliverable.
       const componentRule=componentBuild&&COMPONENT_RULE.test(check);
@@ -276,6 +313,6 @@ export function assessRestrictions(userClauses, hostConstraints = [], invocation
   const sources=[...new Set(evidence.filter(x=>x.scope==='all-writes').map(x=>x.source))];
   const observationalOnly=!allowsSeparateOutput&&evidence.some(x=>x.source==='user-request'&&x.scope==='protected-target')&&observationalWorkOnly(positiveClauses);
   if(observationalOnly&&!sources.includes('user-request'))sources.push('user-request');
-  return {readOnly:sources.length>0,sources,protectedScopes:evidence.filter(x=>x.scope!=='all-writes'),evidence:[...evidence,...networkEvidence],networkForbidden:networkEvidence.length>0,
+  return {readOnly:sources.length>0,sources,protectedScopes:evidence.filter(x=>x.scope!=='all-writes'),evidence:[...evidence,...networkEvidence],networkForbidden:networkEvidence.length>0,forbiddenOperations,unresolvedConstraints,
     workMode:observationalOnly?'observational-only':allowsSeparateOutput?'separate-output-requested':'unresolved'};
 }

@@ -307,7 +307,9 @@ export function taskAssessment(query, taskContext = {}, invocationContext = {}) 
     retrievalText: unique([structure.intentText, ...hostRetrieval]).join('\n'),
     interpretation: {source:'host-context',authority:'advisory-only',hostComplexity,complexityEvidence:hostEvidence,
       retrievalCapabilityNeeds:capabilityNeeds.map(advisoryProjection).filter(Boolean)},
-    restrictions: {readOnly, sources:readOnlySources, protectedScopes:restrictionAssessment.protectedScopes,evidence:restrictionAssessment.evidence,networkForbidden:restrictionAssessment.networkForbidden,executionScope:suppliedOperation?'chat-only':'unspecified',mode:invocationContext.mode || 'unspecified',canGrantPermission:false},
+    restrictions: {readOnly, sources:readOnlySources, protectedScopes:restrictionAssessment.protectedScopes,evidence:restrictionAssessment.evidence,networkForbidden:restrictionAssessment.networkForbidden,
+      forbiddenOperations:restrictionAssessment.forbiddenOperations,unresolvedConstraints:restrictionAssessment.unresolvedConstraints,workMode:restrictionAssessment.workMode,
+      executionScope:suppliedOperation?'chat-only':restrictionAssessment.forbiddenOperations.length?'device-operations-restricted':'unspecified',mode:invocationContext.mode || 'unspecified',canGrantPermission:false},
     excludedContext: {futureClauses: clauses.future.length, negativeClauses: clauses.negative.length},
   };
 }
