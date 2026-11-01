@@ -8,6 +8,7 @@ import { discoverSkills, resolveDiscoveredSkill, refreshIndex } from './discover
 import { loadRegistry, validateRegistry } from './registry.mjs';
 import { ROUTER_VERSION } from './version.mjs';
 import { planWorkItems } from './work-planner.mjs';
+import { recordOutcomeV4 } from './feedback-v4.mjs';
 
 const [command = 'help', ...args] = process.argv.slice(2);
 const output = value => process.stdout.write(typeof value === 'string' ? value+'\n' : JSON.stringify(value,null,2)+'\n');
@@ -35,7 +36,15 @@ function parse(values) {
   return {query:words.join(' ').trim(),options,contextMode,jsonInput};
 }
 try {
-  if(command==='plan-agents'){
+  if(command==='report-outcome'){
+    if(args.some(arg=>!['--input-json','--dry-run'].includes(arg)) || new Set(args).size!==args.length)
+      throw new Error('report-outcome accepts only --input-json and --dry-run; provide a V4 JSON record on stdin');
+    let value;
+    try { value=JSON.parse(fs.readFileSync(0,'utf8')); }
+    catch { throw new Error('report-outcome requires a valid JSON object on stdin'); }
+    const result=recordOutcomeV4(value,{dryRun:args.includes('--dry-run')});
+    output(result); if(!result.recorded&&!result.dryRun) process.exitCode=1;
+  }else if(command==='plan-agents'){
     const input=JSON.parse(fs.readFileSync(args[0]||0,'utf8')); output(planWorkItems(input.workItems,input.options));
   }else if(['route','plan','search','resolve','list','health','coverage','refresh-index','capabilities','search-capabilities','recover'].includes(command)){
     const parsed=parse(args); let {query,options}=parsed;
@@ -74,6 +83,6 @@ try {
     }else{
       const registry=loadRegistry();output(command==='list'?registry.skills.map(({id,nameZh,category,status,summaryZh,path})=>({id,nameZh,category,status,summaryZh,path})):{routerVersion:ROUTER_VERSION,schemaVersion:registry.schemaVersion,...validateRegistry(registry),router:'ok'});
     }
-  }else output('skill-router route <任务或stdin> --contract-version 4 --host codex --context | search <任务或stdin> --route-id ID | capabilities | search-capabilities <任务或stdin> --route-id ID | coverage | refresh-index [--output PATH] | resolve NAME --contract-version 4 | list | health | plan-agents JSON。--input-json 从 stdin 读取 {query,options}。省略 contract-version 保留 V3。');
+  }else output('skill-router route <任务或stdin> --contract-version 4 --host codex --context | search <任务或stdin> --route-id ID | capabilities | search-capabilities <任务或stdin> --route-id ID | coverage | refresh-index [--output PATH] | resolve NAME --contract-version 4 | list | health | report-outcome [--dry-run] (stdin: V4 JSON，仅提供必要证据，不自动记录原始请求) | plan-agents JSON。--input-json 从 stdin 读取 {query,options}。省略 contract-version 保留 V3。');
 }catch(error){process.stderr.write('[dynamic-skill-router] '+error.message+'\n');output({ok:false,error:error.message,fallback:'Continue with native capabilities; routing failure does not authorize execution.'});process.exitCode=1;}
 

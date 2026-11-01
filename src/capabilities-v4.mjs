@@ -1,6 +1,6 @@
 import {validateHostOptions,exactToolConsultations} from './host-context-contract.mjs';
 import {invocationConstraints,constrainCapability} from './invocation-constraints.mjs';
-import {requestSegments,negativeDirective} from './request-evidence.mjs';
+import {requestSegments,negativeDirective,exactToolProhibited,imageObjectRemovalInquiry,imageToolProhibitions,imageToolPurposes} from './request-evidence.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -202,8 +202,8 @@ function semanticNeeds(assessment) {
   const needs=[];
   for(const clause of clauses) {
     const info=/^(?:(?:请|帮我|请你|麻烦|please)\s*)*(?:解释|介绍|讲解|说明|比较|举例|(?:给(?:我|出)?|提供|列举).{0,20}(?:例子|示例|实例|样例)|什么是|如何|怎么|explain\b|describe\b|(?:give|show)\b.{0,25}\bexamples?\b|what is\b|how (?:to|does|do)\b)/i.test(clause);
-    const imageClause=clause.replace(/(?:不要|不得|禁止|不能|请勿|不必|无需|无须|不需要|别|不)\s*(?:实际|直接|主动|自行|擅自|再|去)?\s*(?:生成|绘制|画出|制作|创作|编辑|修改|修复|虚化|模糊|透明化)/g,'')
-      .replace(/\b(?:do not|don't|never|without)\s+(?:actually\s+|directly\s+)?(?:generate|create|draw|make|render|edit|modify|retouch|blur|soften|defocus)\b/gi,'');
+    const imageClause=clause.replace(/(?:不要|不得|禁止|不能|请勿|不必|无需|无须|不需要|别|不)\s*(?:实际|直接|主动|自行|擅自|再|去)?\s*(?:生成|绘制|画出|制作|创作|编辑|修改|修复|虚化|模糊|透明化|移除|去除|去掉|删掉|删除|擦除|抹去|抹掉)/g,'')
+      .replace(/\b(?:do not|don't|never|without)\s+(?:actually\s+|directly\s+)?(?:generate|create|draw|make|render|edit|modify|retouch|blur|soften|defocus|remove|erase|delete)\b/gi,'');
     const picture=PICTURE.test(imageClause);
     if(picture) {
       const source=/(?:附件|附图|上传的|所附|\b(?:attached|attachment|uploaded)\b)/i.test(clause)?'attachment'
@@ -226,17 +226,25 @@ function semanticNeeds(assessment) {
       // “查看照片背景虚化程度” describes an existing image; it is not a
       // request to apply the same background effect.
       const backgroundDiscussion=/^(?:(?:请|帮我|请你|麻烦|please)\s*)*(?:查看|阅读|观察|描述|分析|判断|评估|解释|说明|比较|\b(?:view|inspect|describe|analy[sz]e|explain|compare)\b).{0,80}(?:背景|background).{0,30}(?:程度|效果|状态|原因|含义|\b(?:effect|appearance|degree)\b)/i.test(imageClause);
-      const read=/(?:查看|阅读|读取|观察|识别|看一下|解释|描述|分析|\b(?:view|read|inspect|examine|describe|analy[sz]e|interpret|look at)\b)/i.test(clause);
+      // An object removed from inside a picture is an edit, not deletion of
+      // the picture file or a request to change its metadata.
+      const objectRemoval=!/(?:元数据|文件名|文件本身|\b(?:metadata|exif|filename)\b)/i.test(imageClause)
+        && (/(?:图片|图像|照片|插画|截图)(?:中|里|内|上)(?:的)?(?:(?:移除|去除|去掉|删除|删掉|擦除|抹去|抹掉)[^，。；;！？!?]{1,20}|[^，。；;！？!?]{1,20}?(?:移除|去除|去掉|删除|删掉|擦除|抹去|抹掉))/i.test(imageClause)
+          ||/(?:移除|去除|去掉|删除|删掉|擦除|抹去|抹掉).{0,16}(?:图片|图像|照片|插画|截图)(?:中|里|内|上)(?:的)?[^，。；;！？!?]{1,20}/i.test(imageClause)
+          ||/\b(?:remove|erase)\b.{1,45}\bfrom\s+(?:(?:the|a|an|attached|uploaded|provided|existing|original)\s+){0,6}(?:images?|photos?|photographs?|pictures?)\b/i.test(imageClause));
+      const removalDiscussion=/^(?:(?:请|帮我|请你|麻烦|please)\s*)*(?:查看|阅读|观察|描述|分析|判断|评估|解释|说明|比较|\b(?:view|inspect|describe|analy[sz]e|explain|compare)\b).{0,80}(?:移除|去除|去掉|删除|删掉|擦除|抹去|\b(?:remove|erase)\b).{0,30}(?:程度|效果|状态|原因|含义|\b(?:effect|appearance|degree)\b)/i.test(imageClause);
+      const removalInquiry=imageObjectRemovalInquiry(imageClause);
+      const read=/(?:查看|阅读|读取|观察|识别|检查|看一下|解释|描述|分析|\b(?:view|read|inspect|examine|describe|analy[sz]e|interpret|look at)\b)/i.test(clause);
       if(!info&&create&&((nonIconCreate&&!visualCodeOnly)||(iconCreate&&!iconCodeOnly)))needs.push({kind:'image-create',clause,source});
-      if(!info&&edit&&!backgroundDiscussion&&!iconCodeOnly)needs.push({kind:'image-edit',clause,source});
-      if(read&&!create&&(!edit||backgroundDiscussion)&&(!info||actualInput))needs.push({kind:'image-read',clause,source});
+      if(!info&&(edit||objectRemoval)&&!backgroundDiscussion&&!removalDiscussion&&!removalInquiry&&!iconCodeOnly)needs.push({kind:'image-edit',clause,source});
+      if(read&&!create&&(!(edit||objectRemoval)||backgroundDiscussion||removalDiscussion||removalInquiry)&&(!info||actualInput))needs.push({kind:'image-read',clause,source});
       if(!info&&/(?:搜索|检索|查找|寻找|找|\b(?:search|find|look for)\b)/i.test(clause))needs.push({kind:'image-search',clause,source});
     }
     if(!info&&ARTIFACT_ACTION.test(clause))for(const item of ARTIFACT_TYPES)if(item.request.test(clause))needs.push({kind:item.kind,clause});
     // Keep explicit negative web actions from becoming affirmative needs, even
     // when the higher-level clause filter retained a short “不打开” phrase.
-    const webClause=clause.replace(/(?:不要|不得|禁止|不能|请勿|不必|无需|无须|不需要|别|不)\s*(?:再|主动|直接|自行|实际|擅自|去)?\s*(?:打开|访问|读取|阅读|浏览|查看|读出|搜索|检索|查找|查询|核验|核实|查证)/g,'');
-    const directSearch=/(?:联网|上网|网上|在线|网络|网页|网站|官网|官方|internet|online|web|official|\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b)/i.test(webClause)&&/(?:搜索|检索|查找|查询|核验|核实|查证|查|\b(?:search|find|verify|research|look up|check)\b)/i.test(webClause);
+    const webClause=clause.replace(/(?:不要|不得|禁止|不能|请勿|不必|无需|无须|不需要|别|不)\s*(?:再|主动|直接|自行|实际|擅自|去)?\s*(?:打开|访问|读取|阅读|浏览|查看|读出|搜索|检索|查找|查询|核验|核对|核实|查证)/g,'');
+    const directSearch=/(?:联网|上网|网上|在线|网络|网页|网站|官网|官方|internet|online|web|official|\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b)/i.test(webClause)&&/(?:搜索|检索|查找|查询|核验|核对|核实|查证|查|\b(?:search|find|verify|research|look up|check)\b)/i.test(webClause);
     // A request to look up a current stock price needs a source even when the
     // user does not explicitly say "online". Do not infer that need from a
     // historical, explanatory, offline or supplied-sources-only discussion.
@@ -244,7 +252,15 @@ function semanticNeeds(assessment) {
       && /(?:现在|当前|目前|今天|今日|最新|实时|\b(?:now|today|current|latest|live|real[ -]?time)\b)/i.test(webClause)
       && /(?:查询|查看|查找|搜索|检索|获取|查|多少|\b(?:find|look up|check|fetch|get|what is)\b)/i.test(webClause)
       && !assessment.inferredConstraints?.networkForbidden && assessment.inferredConstraints?.sourceScope!=='provided-only';
-    const search=directSearch||currentQuote;
+    const recentFinance=!info && /(?:财报|季报|年报|财务报告|季度业绩|(?:股票|证券|股市).{0,12}(?:新闻|消息|资讯)|(?:新闻|消息|资讯).{0,12}(?:股票|证券|股市)|\b(?:stock|share|equity)\s+news\b|\b(?:earnings|financial)\s+(?:reports?|statements?)\b)/i.test(webClause)
+      && /(?:最近|近期|最新|近来|刚发布|本季|上季|\b(?:recent|latest|current|last\s+quarter)\b)/i.test(webClause)
+      && /(?:查询|查找|搜索|检索|获取|搜集|查|\b(?:find|search|look up|check|fetch|get)\b)/i.test(webClause)
+      && !assessment.inferredConstraints?.networkForbidden && assessment.inferredConstraints?.sourceScope!=='provided-only';
+    const recentMonetary=!info && /(?:(?:央行|中央银行|美联储).{0,12}(?:利率|降息|加息|决议|政策)|(?:利率|降息|加息).{0,12}(?:央行|中央银行|美联储)|货币政策|\b(?:central bank|federal reserve)\b.{0,20}\b(?:rates?|monetary policy)\b)/i.test(webClause)
+      && /(?:最近|近期|最新|当前|今天|今日|本周|上周|\b(?:recent|latest|current|today|this week|last week)\b)/i.test(webClause)
+      && /(?:查询|查找|搜索|检索|核验|核对|核实|查证|查|\b(?:find|search|look up|check|verify)\b)/i.test(webClause)
+      && !assessment.inferredConstraints?.networkForbidden && assessment.inferredConstraints?.sourceScope!=='provided-only';
+    const search=directSearch||currentQuote||recentFinance||recentMonetary;
     const open=/(?:阅读|读取|浏览|打开|查看|访问|\b(?:read|open|browse|visit|fetch)\b).{0,45}(?:网页|网址|网站|链接|页面|https?:\/\/|\b(?:page|url|link|website)\b)/i.test(webClause)
       ||(!info&&/(?:网页|网址|网站|链接|页面|\b(?:page|url|link|website)\b|https?:\/\/[^\s<>"，。！？、；）)]+).{0,45}(?:阅读|读取|读出|浏览|打开|查看|访问|\b(?:read|open|browse|visit|fetch)\b)/i.test(webClause));
     if(search)needs.push({kind:'web-search',clause});
@@ -337,6 +353,7 @@ function adviseCapabilitiesBase(assessment, options = {}) {
   const inventory = options.capabilityIndex || discoverCapabilities(options);
   const active = assessment.activeText || '';
   const needs=semanticNeeds(assessment);
+  const imageBans=imageToolProhibitions(assessment.rawText??active);
   const givenPhase=options.phase||options.invocationContext?.phase;
   const phase = (!givenPhase||givenPhase==='auto')&&needs.some(n=>n.kind==='image-create'||n.kind==='image-edit'||n.kind.startsWith('artifact-edit:'))?'implementation':currentPhase(active,givenPhase);
   const pureImageTask=needs.length>0&&needs.every(n=>n.kind.startsWith('image-'));
@@ -362,12 +379,18 @@ function adviseCapabilitiesBase(assessment, options = {}) {
   const cards = [];
   for (const entry of inventory.capabilities) {
     if (!entry.enabled) continue;
+    if (entry.kind==='tool' && exactToolProhibited(assessment.rawText??assessment.activeText,entry.name)) continue;
     const runtimeRecord=entry.kind==='tool'?(options.runtimeTools||[]).find(t=>t.name===entry.name):null;
     if(runtimeRecord?.available===false)continue;
     const callable=runtimeRecord?true:entry.callable;
     const declaredAvailable=typeof runtimeRecord?.available==='boolean'?runtimeRecord.available:entry.declaredAvailable??null;
     if (entry.kind==='mcp' && entry.tools.length) continue; // Tools provide the actionable granularity.
-    const semantics=semanticMatches(entry,needs),semantic=semantics[0];
+    const semantics=semanticMatches(entry,needs).filter(match=>!(match.kind==='image-create'&&imageBans.create)&&!(match.kind==='image-edit'&&imageBans.edit)),semantic=semantics[0];
+    const imagePurpose=(imageBans.create||imageBans.edit)?imageToolPurposes(entry.description):{create:false,edit:false};
+    const imageRestrictionGates=[...(imageBans.create&&imagePurpose.create?['user-prohibits-image-generation']:[]),...(imageBans.edit&&imagePurpose.edit?['user-prohibits-image-edit']:[])];
+    // A ban on a class of tools also excludes mixed-purpose tools whose stated
+    // purpose includes that class, regardless of the operation planned now.
+    if(imageRestrictionGates.length)continue;
     const independentNeed=semantics.some(match=>![...namedProviders].some(p=>(`-${label(match.clause)}-`).includes(`-${p}-`)));
     if(entry.kind==='tool'&&namedProviders.size&&!namedProviders.has(providerKey(entry.plugin))&&!namedProviders.has(providerKey(entry.server))&&![...namedProviders].some(p=>(`-${label(entry.name)}-`).includes(`-${p}-`))&&!independentNeed)continue;
     // Purpose text carries more signal than cross-tool instructions and examples.
@@ -380,6 +403,8 @@ function adviseCapabilitiesBase(assessment, options = {}) {
       const escaped=String(x).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
       return new RegExp(`(?:\\$|使用\\s*|调用\\s*|用\\s*|use\\s+|invoke\\s+)${escaped}(?=$|[^a-z0-9_-])`,'i').test(active);
     });
+    const uncertainImagePurpose=(imageBans.create||imageBans.edit)&&!imagePurpose.create&&!imagePurpose.edit&&explicit
+      && needs.some(n=>n.kind==='image-create'||n.kind==='image-edit')&&!semantics.some(n=>!n.kind.startsWith('image-'));
     const provider=toolProvider(entry), providerParts=provider.split('-');
     const providerPrefix=providerParts.slice(0,-1).join('-');
     // A distinctive partial service name ("Feishu" for "Feishu Drive")
@@ -440,6 +465,7 @@ function adviseCapabilitiesBase(assessment, options = {}) {
     if (entry.kind==='plugin') {decision='discover-first';gates.push('select-specific-tool-or-read-relevant-skill');}
     if (competingProvider && decision!=='skip') {decision='defer';gates.push('different-specified-provider');}
     if (op.effect==='high-impact' || op.effect==='external-write') gates.push('check-destination-and-current-action-authorization');
+    if(uncertainImagePurpose){if(decision!=='skip')decision='defer';gates.push('image-category-prohibition-purpose-unverified');}
     cards.push({id:entry.id,kind:entry.kind,name:entry.name,plugin:entry.plugin || null,server:entry.server || null,
       description:entry.description.slice(0,240),score,explicit,matchedTerms:shared.slice(0,6),
       ...(semantic?{intentMatches:unique(semantics.map(match=>match.kind)),purposeEvidence:{source:'tool-description',text:purpose.slice(0,240)},inputEvidence:inputEvidence(assessment,semantics)}:{}),

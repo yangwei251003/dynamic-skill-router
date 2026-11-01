@@ -285,7 +285,7 @@ function queryClauses(query) {
     // A prohibition may be followed by an independent read-only goal without
     // punctuation. Do not split attributive constraints such as 无需联网的.
     .flatMap(value => /(?:不要|不得|禁止|严禁|请勿|禁用|不使用|不用|不调用|不采用|不执行|(?<![分识辨区判鉴])别用|do not|don't|never)/iu.test(value)
-      ? value.split(/(?:并|然后|接着|[:：])(?=\s*(?:(?:请|继续|直接)\s*)?(?:只(?:读|检查|查看|阅读|审查|分析)|仅(?:限)?(?:只读|查看|读取|检查|审查|阅读|分析)))|\band\b(?=\s+(?:only|read.only)\s+(?:inspect|read|review|check|analy[sz]e)\b)/iu)
+      ? value.split(/(?:并|然后|接着|[:：])(?=\s*(?:(?:请|继续|直接)\s*)?(?:只(?:读|检查|查看|阅读|审查|分析)|仅(?:限)?(?:只读|查看|读取|检查|审查|阅读|分析)))|(?:并|同时)(?=\s*请\s*(?:(?:继续|直接|另外)\s*)?(?:编辑|修改|移除|去除|处理|生成|绘制|查询|查找|搜索|检索|联网|使用|调用))|\band\b(?=\s+(?:only|read.only)\s+(?:inspect|read|review|check|analy[sz]e)\b)/iu)
       : [value])
     .map(value => value.trim()).filter(Boolean);
   const controlText = maskUrlText;

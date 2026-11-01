@@ -85,6 +85,86 @@ export function instructionClauses(text='') {
     .map(c=>c.replace(/\uE000(\d+)\uE001/g,(_,i)=>urls[Number(i)]).trim()).filter(Boolean);
 }
 
+function maskDirectiveUrls(value='') {
+  const text=String(value), urls=/https?:\/\/[^\s<>"“”。，！？；]+/giu;
+  const pairs={'(':')','（':'）','[':']','【':'】'};
+  let masked='',cursor=0,url;
+  while((url=urls.exec(text))) {
+    let prev=url.index-1;while(prev>=0&&/[ \t]/u.test(text[prev]))prev--;
+    const open=text[prev],close=pairs[open];let length=url[0].length,depth=0;
+    if(close)for(let i=0;i<url[0].length;i++){
+      if(url[0][i]===open)depth++;
+      else if(url[0][i]===close){if(depth>0)depth--;else{length=i;break;}}
+    }
+    masked+=text.slice(cursor,url.index)+url[0].slice(0,length).replace(/[^\r\n]/g,' ');
+    cursor=url.index+length;urls.lastIndex=cursor;
+  }
+  return masked+text.slice(cursor);
+}
+
+// Current, exact tool prohibitions apply only to the named handle. Do not
+// infer a provider-wide ban from a shared leaf name or from quoted material.
+export function exactToolProhibited(query='',toolName='') {
+  if (typeof toolName!=='string'||!toolName.trim()) return false;
+  if (!String(query).toLowerCase().includes(toolName.toLowerCase())) return false;
+  const masked=maskDirectiveUrls(instructionText(query));
+  const escaped=toolName.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const prior='(?:[$\\p{L}\\p{N}_.:-]+\\s*(?:和|与|及|、|\\band\\b|\\bor\\b)\\s*)*';
+  const exactName=`(?:'${escaped}'|${escaped})`;
+  const rule=new RegExp(`(?:不要|不得|禁止|严禁|请勿|禁用|不使用|不用|不调用|不执行|(?<![分识辨区判鉴])别用|do not|don't|never)\\s*(?:(?:再|主动|自行|直接|实际|擅自)\\s*)*(?:使用|调用|执行|启用|参考|咨询|用|use|invoke|call|run)?\\s*(?:(?:工具|tool)\\s*)?${prior}\\$?${exactName}(?![\\p{L}\\p{N}_.:-])`,'giu');
+  for(const clause of instructionClauses(masked)) {
+    rule.lastIndex=0;let match;
+    while((match=rule.exec(clause))) {
+      const before=clause.slice(0,match.index).trimEnd();
+      if(/(?:以后|将来|未来|下次|日后|later|in future)(?:再|请)?\s*$/iu.test(before))continue;
+      if(/(?:不必|无需|不需要|不要求|并非|不是|不)\s*$/u.test(before))continue;
+      return true;
+    }
+  }
+  return false;
+}
+
+// Category bans are current explicit instructions about tool use, not a
+// blanket ban inferred from a quoted example or an unrelated negative.
+export function imageToolProhibitions(query='') {
+  const result={create:false,edit:false};
+  const clauses=instructionClauses(maskDirectiveUrls(instructionText(query)));
+  const head=/(?:不要|不得|禁止|严禁|请勿)\s*(?:(?:再|主动|自行|直接|实际|擅自)\s*)*(?:调用|使用|启用|用)|(?:禁用|不使用|不用|不调用)|\b(?:do not|don't|never)\s+(?:use|invoke|call|run)\b/giu;
+  for(const clause of clauses) {
+    head.lastIndex=0;let hit;
+    while((hit=head.exec(clause))) {
+      const before=clause.slice(0,hit.index).trimEnd();
+      if(/(?:以后|将来|未来|下次|日后|later|in future)(?:再|请)?\s*$/iu.test(before)||/(?:不必|无需|不需要|不要求|并非|不是|不|不要)\s*$/u.test(before))continue;
+      const tail=clause.slice(hit.index,hit.index+90), end=/(?:工具|应用|\btools?\b|\bapi\b)/iu.exec(tail);
+      if(!end)continue;
+      const scope=tail.slice(0,end.index+end[0].length);
+      if(!/(?:图片|图像|照片|插画|\b(?:images?|photos?|pictures?|illustrations?)\b)/iu.test(scope))continue;
+      if(/(?:生成|创建|绘制|创作|\b(?:generat(?:e|ion|ing)|creat(?:e|ion|ing)|draw(?:ing)?)\b)/iu.test(scope))result.create=true;
+      if(/(?:编辑|修改|修图|\b(?:edit(?:ing)?|modif(?:y|ication|ying)|retouch(?:ing)?)\b)/iu.test(scope))result.edit=true;
+    }
+  }
+  return result;
+}
+
+// Read only a tool's stated purpose, not its name or later examples. These
+// signals restrict suggestions; they do not establish availability or consent.
+export function imageToolPurposes(description='') {
+  const paragraphs=String(description).replace(/\r\n/g,'\n').split(/\n\s*\n/);let purpose='';
+  for(let p of paragraphs){p=p.trim().replace(/^#{1,6}\s*/,'');if(!p||/^(?:tools?\s+in\s+(?:the\s+)?[\w.-]+\s+namespace|[\w.-]+\s+namespace|[-_=]+)\.?$/i.test(p))continue;if(/^(?:guidelines|examples|usage hints|exec tool declaration|```)/i.test(p))break;purpose=p.slice(0,700);break;}
+  purpose=purpose.replace(/\b(?:do not use|don't use|not (?:intended|suitable) for|does not)\b[^.!?\n]*/giu,' ');
+  const noun='(?:images?|photos?|photographs?|pictures?|illustrations?|posters?|portraits?|comics?)';
+  const qualifier='(?:(?:a|an|the|of|this|that|existing|attached|uploaded|provided|supplied|local|source|reference|input|original|new|standalone|raster|bitmap|digital|product|selected|user-provided)\\s+){0,6}';
+  const action=(verb,nounAction)=>new RegExp(`\\b${verb}\\b\\s+${qualifier}${noun}\\b|\\b${noun}\\s+${nounAction}\\b`,'i').test(purpose);
+  return {
+    create:action('(?:generat(?:e|es|ed|ing)|creat(?:e|es|ed|ing)|draw(?:s|n|ing)?|render(?:s|ed|ing)?)','(?:generation|creation|rendering)')||/(?:生成|创建|绘制|渲染)(?:一张|一个|新的|新|指定的|目标)?(?:图片|图像|照片|插画)/u.test(purpose),
+    edit:action('(?:edit(?:s|ed|ing)?|modif(?:y|ies|ied|ying)|retouch(?:es|ed|ing)?|alter(?:s|ed|ing)?|restyl(?:e|es|ed|ing))','(?:editing|modification|retouching)')||/(?:编辑|修改|修饰|调整)(?:已有的?|现有的?|上传的|指定的)?(?:图片|图像|照片|插画)|(?:图片|图像|照片|插画)(?:进行|的)?(?:编辑|修改|修饰|调整)/u.test(purpose),
+  };
+}
+
+export function imageObjectRemovalInquiry(text='') {
+  return /(?:是否(?:需要|要)?|需不需要|要不要|应不应该|能否|能不能|可否).{0,12}(?:移除|去除|去掉|删除|删掉|擦除|抹去|抹掉)|(?:移除|去除|去掉|删除|删掉|擦除|抹去|抹掉).{0,18}(?:的)?(?:原因|方案|建议|必要性|可行性|方法|思路)|\b(?:whether|if)\b.{0,30}\b(?:remove|erase|delete)\b|\b(?:remove|erase|delete)\b.{0,30}\b(?:reason|plan|necessity)\b/iu.test(String(text));
+}
+
 // "别用" is a prohibition; the same characters inside "分别用" are not.
 export const negativeDirective=/(?:不要|不得|禁止|不使用|不用|(?<![分识辨区判鉴])别用|无需|不需要|避免|do not|don't|never|without)/iu;
 
@@ -123,7 +203,7 @@ export function inferUserConstraints(query='',activeText='',activeClauses=[]) {
   const outputFile=actionable.some(c=>outputPattern.test(c))||separateOutput;
   const explicitGlobal=clauses.some(c=>/(?:全程|整个任务|所有操作|严格).{0,8}只读|(?:不要|不得|禁止|不能|严禁|请勿).{0,8}(?:修改|写入|更改|删除).{0,8}(?:任何|所有|一切).{0,8}(?:文件|内容|项目|数据)?|\b(?:no changes at all|do not modify any files|do not write any files)\b/i.test(c));
   const readOnlyLanguage=clauses.some(c=>/只读|只(?:查|看|读|审查|审阅|做.{0,5}分析)|仅(?:限)?(?:阅读|查看|检查|审查|审阅|分析)|\bread.only\b|\b(?:review|check|inspect|examine|audit|read|view)\s+only\b/i.test(c.replace(/(?:不要|不必|无需|不需要|不要求|禁止)\s*(?:使用|采用|保持)?\s*只读(?:模式)?/g,'').replace(/\b(?:not|no longer)\s+read.only\b/gi,'')));
-  const preserveInput=clauses.some(c=>/(?:保持|保留).{0,12}(?:文件|原文|文档|数据|工程).{0,8}(?:原样|不变|不动)|(?:原|原始|输入|已有|现有|提供的)(?:文件|文档|数据|工程|项目|内容|资料)(?:保持)?(?:原样|不变|不动|不被修改)|(?:不要|不得|禁止|请勿|不).{0,5}(?:修改|改动|更改|写入)(?:.{0,10}(?:文件|文档|数据|工程|内容))?|\b(?:do not|don't|never|without)\s+(?:modify|edit|overwrite|change|changing|alter)\b.{0,35}\b(?:input|original|source|existing|repository|repo|website|page|document|file|image|project|part)\b/i.test(c));
+  const preserveInput=clauses.some(c=>/(?:保持|保留).{0,12}(?:文件|原文|文档|数据|工程).{0,8}(?:原样|不变|不动)|(?:原|原始|输入|已有|现有|提供的)(?:文件|文档|数据|工程|项目|内容|资料)(?:保持)?(?:原样|不变|不动|不被修改)|(?:不要|不得|禁止|请勿|不).{0,5}(?:修改|改动|更改|写入)(?:.{0,10}(?:文件|文档|数据|工程|内容))?|\b(?:do not|don't|never|without)\s+(?:modify|edit|overwrite|change|changing|alter)\b.{0,35}\b(?:input|original|source|existing|repository|repo|website|page|document|file|image|project|part)\b/i.test(c))||clauses.some(c=>/(?:保留|保持)\s*(?:原图|原件|原(?:始)?(?:图片|照片|文件))(?=$|[并和与及、，。；\s]|(?:不变|原样|不动))/u.test(c));
   // Inspection and advice are ordinarily non-mutating, but do not suppress a
   // separately requested implementation or output file. Keep advice about a
   // fix distinct from an instruction to actually apply it.
@@ -133,11 +213,29 @@ export function inferUserConstraints(query='',activeText='',activeClauses=[]) {
       .replace(/(?:导出|更新|修改|修复|编译|生成|部署|上传|发送|删除|保存)(?:的)?(?:状态|记录|日志|历史|结果|进度|详情)/g,'')
       .replace(/\b(?:propose|suggest|outline|explain|recommend|describe)\s+(?:an?\s+)?(?:reversible\s+)?(?:fix|repair|change|update|solution)\b/gi,'')
       .replace(/\bbefore\s+(?:compilation|building|deployment)\b/gi,'');
-    return /修改|更改|改写|重构|修复(?!方案|建议|计划|思路|措施|方法)|编辑|删除|创建|新建|开发|实现|部署|上传|发送|写入|保存|替换|更新|导出|编译|另存|(?:生成|绘制|画|制作|创作).{0,20}(?:文件|图片|图像|照片|插画|海报|视频|代码|程序)|\b(?:edit|modify|change|alter|overwrite|update|fix|repair|remove|delete|create|write|generate|implement|develop|build|compile|deploy|publish|send|upload|save)\b|\b(?:make|draw|render|produce)\b.{0,40}\b(?:images?|illustrations?|pictures?|icons?|posters?|videos?)\b/i.test(direct);
+    const mutationText=/(?:图片|图像|照片|插画|截图|\b(?:images?|photos?|pictures?)\b)/iu.test(direct)&&imageObjectRemovalInquiry(direct)
+      ?direct.replace(/(?:是否(?:需要|要)?|需不需要|要不要|应不应该|能否|能不能|可否).{0,12}?(?:移除|去除|去掉|删除|删掉|擦除|抹去|抹掉)/gu,'')
+        .replace(/(?:移除|去除|去掉|删除|删掉|擦除|抹去|抹掉).{0,18}?(?:的)?(?:原因|方案|建议|必要性|可行性|方法|思路)/gu,'')
+        .replace(/\b(?:whether|if)\b.{0,30}?\b(?:remove|erase|delete)\b/giu,'')
+        .replace(/\b(?:remove|erase|delete)\b.{0,30}?\b(?:reason|plan|necessity)\b/giu,'')
+      :direct;
+    return /修改|更改|改写|重构|修复(?!方案|建议|计划|思路|措施|方法)|编辑|删除|创建|新建|开发|实现|部署|上传|发送|写入|保存|替换|更新|导出|编译|另存|(?:生成|绘制|画|制作|创作).{0,20}(?:文件|图片|图像|照片|插画|海报|视频|代码|程序)|\b(?:edit|modify|change|alter|overwrite|update|fix|repair|remove|delete|create|write|generate|implement|develop|build|compile|deploy|publish|send|upload|save)\b|\b(?:make|draw|render|produce)\b.{0,40}\b(?:images?|illustrations?|pictures?|icons?|posters?|videos?)\b/i.test(mutationText);
+  });
+  // A request to add executable tests is a writing task; test advice or an
+  // explanation of how to write tests does not authorize an edit.
+  const testMutation=actionable.some(c=>{
+    const direct=c.replace(/(?:不要|不得|禁止|请勿|不必|无需|不需要|不)\s*(?:再|去|实际)?\s*(?:补充|编写|新增|添加|创建|生成|写).{0,12}(?:回归|单元|集成|端到端|自动化)?测试(?:代码|用例|文件)?/g,'')
+      .replace(/(?:说明|解释|介绍|描述|讲解|讨论)(?:一下)?(?:如何|怎样|怎么).{0,12}(?:补充|编写|新增|添加|创建|生成|写).{0,12}(?:回归|单元|集成|端到端|自动化)?测试(?:代码|用例|文件)?/g,'');
+    return /(?:补充|编写|新增|添加|创建|生成|写).{0,12}(?:回归|单元|集成|端到端|自动化)?(?:测试(?:代码|用例|文件)(?!的?(?:方案|建议|计划|策略|思路|清单|报告|说明))|测试(?!代码|用例|文件|的?(?:方案|建议|计划|策略|思路|清单|报告|说明)))/u.test(direct);
+  });
+  const imageObjectMutation=actionable.some(c=>{
+    const direct=c.replace(/(?:提出|给出|说明|解释|分析|评估|讨论|制定).{0,30}(?:移除|去除|去掉|删除|擦除|抹去).{0,16}(?:建议|方案|思路|方法|计划|效果|说明)/g,'');
+    if(imageObjectRemovalInquiry(direct))return false;
+    return /(?:图片|图像|照片|插画|截图)(?:中|里|内|上)(?:的)?.{0,18}(?:移除|去除|去掉|删除|删掉|擦除|抹去|抹掉)/u.test(direct);
   });
   const restrictedInput=readOnlyLanguage||preserveInput;
-  const readOnly=explicitGlobal||((restrictedInput||inspection)&&!outputFile&&!mutation);
-  const preserveInputs=(outputFile||mutation)&&restrictedInput;
+  const readOnly=explicitGlobal||((restrictedInput||inspection)&&!outputFile&&!mutation&&!testMutation&&!imageObjectMutation);
+  const preserveInputs=(outputFile||mutation||testMutation||imageObjectMutation)&&restrictedInput;
   const allowsProvidedNetworkUse=clauses.some(c=>{
     const permitted=c.replace(/(?:不要|不得|禁止|不能|请勿|别|不)\s*(?:主动|自行|直接|再|去)?\s*(?:打开|访问|读取|阅读|浏览|查看|使用|用)/g,'')
       .replace(/\b(?:do not|don't|never)\s+(?:open|visit|read|fetch|use|consult)\b/gi,'');
@@ -146,18 +244,19 @@ export function inferUserConstraints(query='',activeText='',activeClauses=[]) {
   });
   const networkForbidden=clauses.some(c=>{
     // Strip negated prohibitions first; "不禁止联网" does not forbid access.
-    let direct=c.replace(/(?:不要|不用|无需|无须|不必|不需要|不要求|不强制|并非|并不|不是|没有|未曾|未明确|未|不)\s*(?:完全)?\s*(?:禁止|禁用|限制|关闭|断开|停用)\s*(?:联网|上网|网络|互联网|外网|网络访问|访问网络|连接网络)/g,'')
+    let direct=c.replace(/(?:不要|不用|无需|无须|不必|不需要|不要求|不强制|并非|并不|不是|没有|未曾|未明确|未|不)\s*(?:完全)?\s*(?:禁止|禁用|限制|关闭|断开|停用)\s*(?:联网|连网|连互联网|上网|网络|互联网|外网|网络访问|访问网络|连接网络)/g,'')
       .replace(/(?:不要|不用|无需|无须|不必|不需要|不要求|不强制|并非|不是)\s*(?:只|仅|完全)?\s*离线(?:模式|操作|完成|使用)?/g,'')
       .replace(/\b(?:do not|don't|never|not)\s+(?:ban|prohibit|forbid|restrict|disable)\s+(?:the\s+)?(?:internet|network|web|online access)\b/gi,'');
     // If the user explicitly permits opening a supplied source, a search-only
     // prohibition must not cancel that permission. A separate unconditional
     // no-network instruction still applies.
     if(allowsProvidedNetworkUse)direct=direct
-      .replace(/(?:不要|不得|禁止|不能|请勿|不必|无需|无须|别|不)\s*(?:再|主动|自行|擅自|去)?\s*(?:联网|上网|网上|在线)(?:去|进行)?(?:搜索|检索|查找|查询|查阅|浏览)/g,'')
+      .replace(/(?:不要|不得|禁止|不能|请勿|不必|无需|无须|别|不)\s*(?:再|主动|自行|擅自|去)?\s*(?:联网|连网|连互联网|上网|网上|在线)(?:去|进行)?(?:搜索|检索|查找|查询|查阅|浏览)/g,'')
       .replace(/\b(?:do not|don't|never)\s+(?:search|query|research)\s+(?:the\s+)?(?:internet|web|network|online)\b/gi,'');
-    const forbidden=/(?:不要|不得|禁止|不允许|不能|请勿|严禁|不|避免|无需|不必)(?:(?:主动|自行|擅自|直接|尝试|再|实际|进行|执行|任何|通过|使用|访问|连接|接入|向外|远程|网上|在线|外部|外网|网络|互联网|发起|发送|对外|第三方|的|\s)){0,12}(?:联网|上网|(?:网上|在线)(?:搜索|查找|浏览|检索|查询|访问|请求)|(?:使用|用|连接|接入|访问)(?:到|任何|外部)?(?:网络|互联网|外网)|网络(?:请求|访问|连接|通信|调用)|互联网(?:请求|访问|连接)|(?:搜索|查询|检索|浏览|查阅|访问)(?:互联网|网络|外网|网页|网站))/i;
-    const offline=/离线(?:完成|处理|运行|使用|总结|分析|阅读|审查|检查|工作|执行|计算|编辑|生成|制作|查找|检索|搜索|安装|验证|调查|设计|解答|研究|模式|环境|状态|条件|方式)/i;
-    return forbidden.test(direct)||offline.test(direct)||/\b(?:no (?:internet|network)|offline only|work offline)\b|\b(?:do not|don't|never)\b.{0,28}\b(?:use|access|connect|browse|search|go online)\b.{0,25}\b(?:internet|web|network|online)\b/i.test(direct);
+    const forbidden=/(?:不要|不得|禁止|不允许|不准|不能|请勿|严禁|(?<![分识辨区判鉴])别|不|避免|无需|不必)(?:(?:主动|自行|擅自|直接|尝试|再|实际|进行|执行|任何|通过|使用|访问|连接|接入|向外|远程|网上|在线|外部|外网|网络|互联网|发起|发送|对外|第三方|的|\s)){0,12}(?:联网|连网|连互联网|上网|(?:网上|在线)(?:搜索|查找|浏览|检索|查询|访问|请求)|(?:使用|用|连接|接入|访问)(?:到|任何|外部)?(?:网络|互联网|外网)|网络(?:请求|访问|连接|通信|调用)|互联网(?:请求|访问|连接)|(?:搜索|查询|检索|浏览|查阅|访问)(?:互联网|网络|外网|网页|网站))/i;
+    const noRemoteAcquisition=/(?:不要|不得|禁止|不能|不准|请勿|严禁|(?<![分识辨区判鉴])别)\s*(?:再|主动|自行|直接)?\s*(?:通过|从|使用|利用)\s*(?:互联网|网络|外网|网上)\s*(?:获取|下载|访问|连接)/i;
+    const offline=/离线(?:(?:完成|处理|运行|使用|总结|分析|阅读|审查|检查|工作|执行|计算|编辑|生成|制作|查找|检索|搜索|安装|验证|调查|设计|解答|研究|模式|环境|状态|条件|方式)|\s*(?:解释|介绍|讲解))/i;
+    return forbidden.test(direct)||noRemoteAcquisition.test(direct)||offline.test(direct)||/\b(?:no (?:internet|network)|offline only|work offline)\b|\b(?:do not|don't|never)\b.{0,28}\b(?:use|access|connect|browse|search|go online)\b.{0,25}\b(?:internet|web|network|online)\b/i.test(direct);
   });
   const sourcePattern=/(?:只|仅|只能|仅能).{0,7}(?:使用|用|阅读|读取|查看|浏览|研读|分析|读|根据|依据|参考|基于|利用|依托).{0,18}(?:(?:提供|给定|所给|已有|给的|给你(?:的)?|发给你(?:的)?|附上|附带|上传(?:的)?).{0,10}(?:资料|来源|内容|文件|数据|文档|笔记|图片|视频|素材|文本|链接|附件)|附件|正文|原文|材料|文本|链接)|(?:不要|不得|禁止|不能|请勿|不允许).{0,8}(?:检索|搜索|查找|查阅|引用|获取|使用|采用|读取|参考|利用|浏览).{0,10}(?:其他|其它|额外|外部|更多|第三方).{0,8}(?:资料|来源|文献|信息|网页|网站|材料|内容|文档|数据)|\b(?:(?:only|solely)\s+(?:use|read|consult|rely on|based on)|(?:use|read|consult|rely on)\s+(?:only|solely))\b.{0,35}\b(?:(?:provided|supplied|given|attached)\s+(?:sources?|text|documents?|links?|notes|materials?|files?|data)|sources?|text|notes)\b|\b(?:do not|don't|never)\s+(?:search|consult|use)\b.{0,25}\b(?:other|additional|external)\s+(?:sources|materials|references)\b/i;
   const sourceNegated=c=>/(?:不必|无需|无须|不用|不需要|不要|不要求|没有要求|不限制|不局限|不限定).{0,12}(?:限制|(?:只|仅)(?:能)?(?:使用|用|阅读|读取|查看|浏览|研读|分析|读|引用|参考|根据|依据))|(?:不只|不仅|不止|不单|不光|并非只|并非仅|不是只|不是仅)(?:仅|是|单)?(?:使用|用|阅读|读取|查看|浏览|研读|分析|读|引用|参考|根据|依据)|\b(?:do not|don't|never)\s+(?:restrict|limit|require|insist|force)\b.{0,60}\b(?:only|solely)\b/i.test(c);

@@ -16,7 +16,7 @@ import { routeTaskV4, searchSkills, formatAgentContextV4, taskAssessment } from 
 import { discoverCapabilities, adviseCapabilities } from './capabilities-v4.mjs';
 import {planRecovery} from './recovery-v4.mjs';
 import { discoverSkills, resolveDiscoveredSkill } from './discovery-v4.mjs';
-import { validateOutcomeV4 } from './feedback-v4.mjs';
+import { reportOutcomeSchema, recordOutcomeV4 } from './feedback-v4.mjs';
 
 const asResult = (value) => ({content: [{type: 'text', text: JSON.stringify(value, null, 2)}], structuredContent: value});
 const hostSchema = z.enum(['generic', 'codex', 'workbuddy', 'antigravity', 'claude', 'cursor']);
@@ -207,39 +207,10 @@ function createServer() {
   server.registerTool('report_outcome', {
     title: '记录路由效果',
     description: '记录本次技能选择是否合适，供以后调优；不会自动改写路由规则。',
-    inputSchema: z.object({
-      contractVersion: z.union([z.literal(3), z.literal(4)]).optional().default(3),
-      taskType: z.string().min(1).optional(),modelId:z.string().min(1).optional(),observedAt:z.string().optional(),revoked:z.boolean().optional(),
-      decisions: z.array(z.object({skillId: z.string().min(1), contentHash: z.string().min(1), mode: z.enum(['skip','consult','adapt','execute']), shown: z.boolean(), read: z.boolean(), adopted: z.boolean(), outcome: z.enum(['helpful','wrong','unnecessary','unknown']), evidence: z.array(z.object({kind: z.enum(['validation','user','self']), reference: z.string().min(1), passed: z.boolean().optional()}))})).optional(),
-      routeId: z.string().optional(),
-      registryRevision: z.string().optional(),
-      host: hostSchema.optional(),
-      query: z.string().optional(),
-      selectedIds: z.array(z.string()).optional(),
-      affectedSkillId: z.string().optional().describe('组合路由中只有一个技能有问题时填写，避免把结果错误归因给所有技能'),
-      missingSkillId: z.string().optional(),
-      desiredIds: z.array(z.string()).optional(),
-      outcome: z.enum(['helpful', 'wrong', 'missing', 'unnecessary']).optional(),
-      execution: z.object({
-        inputTokens: z.number().nonnegative().optional(),
-        cachedInputTokens: z.number().nonnegative().optional(),
-        outputTokens: z.number().nonnegative().optional(),
-        cost: z.number().nonnegative().optional(),
-        latencyMs: z.number().nonnegative().optional(),
-        retries: z.number().int().nonnegative().optional(),
-        agentCount: z.number().int().positive().optional(),
-        qualityScore: z.number().min(0).max(1).optional(),
-        success: z.boolean().optional(),
-      }).optional(),
-      note: z.string().optional(),
-    }),
+    inputSchema: reportOutcomeSchema,
   }, async (feedback) => {
     if (feedback.contractVersion === 4) {
-      const checked = validateOutcomeV4(feedback);
-      if (!checked.ok) return asResult({recorded: false, errors: checked.errors});
-      fs.mkdirSync(LOG_ROOT, {recursive: true});
-      fs.appendFileSync(path.join(LOG_ROOT, 'feedback-v4.jsonl'), `${JSON.stringify({...checked.entry, timestamp: new Date().toISOString()})}\n`, 'utf8');
-      return asResult({recorded: true, taskIdentityPresent: Boolean(feedback.routeId?.trim()), policy: '需要 routeId、可靠 modelId、当前内容hash与90天内 observedAt/timestamp 才参与校准；过期、未来、撤销或冲突记录不计分。仅对已采用且有验证或用户证据的同宿主、任务类型、内容版本和采用方式进行有界校准；不是模型训练。'});
+      return asResult(recordOutcomeV4(feedback));
     }
     if (typeof feedback.query !== 'string' || !feedback.selectedIds || !feedback.outcome) return asResult({recorded: false, errors: ['V3 requires query, selectedIds and outcome']});
     fs.mkdirSync(LOG_ROOT, {recursive: true});
