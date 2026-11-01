@@ -1,6 +1,6 @@
 {
   "name": "yangwei-dynamic-skill-router",
-  "version": "4.3.17",
+  "version": "4.3.18",
   "private": true,
   "type": "module",
   "description": "面向多种 AI Agent 的本地动态技能路由器",
@@ -16,13 +16,14 @@
     "test:v421": "node scripts/isolated-node.mjs --test tests/local-upgrade-v421.test.mjs",
     "test:v43": "node scripts/isolated-node.mjs --test tests/request-evidence-v43.test.mjs tests/capability-intents-v43.test.mjs tests/readonly-intent-v43.test.mjs tests/scope-v431.test.mjs tests/request-boundaries-v432.test.mjs tests/v433-public.test.mjs tests/v434-public.test.mjs tests/v435-public.test.mjs tests/v436-public.test.mjs tests/v437-public.test.mjs tests/v438-public.test.mjs",
     "test:v439": "node scripts/isolated-node.mjs --test tests/relevance-objects-v439.test.mjs tests/runtime-alias-v439.test.mjs",
-    "test:all": "npm test && npm run test:v421 && npm run test:v43 && npm run test:v439 && npm run test:v4310 && npm run test:v4311 && npm run test:v4312 && npm run test:v4315 && npm run test:v4316 && npm run test:v4317",
+    "test:all": "npm test && npm run test:v421 && npm run test:v43 && npm run test:v439 && npm run test:v4310 && npm run test:v4311 && npm run test:v4312 && npm run test:v4315 && npm run test:v4316 && npm run test:v4317 && npm run test:v4318",
     "test:v4310": "node scripts/isolated-node.mjs --test tests/v4310-public.test.mjs tests/public-dashboard.test.mjs",
     "test:v4311": "node scripts/isolated-node.mjs --test tests/v4311-public.test.mjs",
     "test:v4312": "node scripts/isolated-node.mjs --test tests/network-boundaries-v4312.test.mjs",
     "test:v4315": "node scripts/isolated-node.mjs --test tests/v4315-public.test.mjs",
     "test:v4316": "node scripts/isolated-node.mjs --test tests/v4316-public.test.mjs",
-    "test:v4317": "node scripts/isolated-node.mjs --test tests/v4317-public.test.mjs"
+    "test:v4317": "node scripts/isolated-node.mjs --test tests/v4317-public.test.mjs",
+    "test:v4318": "node scripts/isolated-node.mjs --test tests/v4318-public.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.0.0",

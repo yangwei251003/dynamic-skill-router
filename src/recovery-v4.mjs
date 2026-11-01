@@ -1,5 +1,6 @@
 import {constrainRecovery,invocationConstraints} from './invocation-constraints.mjs';
 import {exactToolProhibited,webSearchToolProhibited,webSearchToolPurpose} from './request-evidence.mjs';
+import {constrainSearchRecovery} from './search-restrictions.mjs';
 const list=x=>Array.isArray(x)?x:[];
 const clean=x=>String(x||'').trim();
 
@@ -73,4 +74,7 @@ export function useFastPath(assessment, options, recovery) {
     ||/^(?:计算|算一下|算算)?\s*[\d\s+\-*/×÷().=]+(?:等于多少|等于几|是多少|结果是多少)[?？。\s]*$/i.test(active);
 }
 
-export function planRecovery(assessment,options={}) { return constrainRecovery(planRecoveryBase(assessment,options),assessment,options); }
+export function planRecovery(assessment,options={}) {
+  const result=constrainRecovery(planRecoveryBase(assessment,options),assessment,options);
+  return constrainSearchRecovery(result,invocationConstraints(assessment,options),assessment,options);
+}

@@ -1,4 +1,5 @@
 import {inferUserConstraints,instructionText,instructionClauses} from './request-evidence.mjs';
+import {normalizeSearchRestrictions,constrainSearchCapability} from './search-restrictions.mjs';
 const list=x=>Array.isArray(x)?x:[];
 const modes=new Set(['plan','read','execute']);
 
@@ -107,6 +108,7 @@ export function invocationConstraints(assessment={},options={}) {
   if(c.sourceScope!==undefined&&!['provided-only','specified-site-only'].includes(c.sourceScope))throw new TypeError('Invalid invocationContext.sourceScope');
   if(c.sourceScopes!==undefined&&(!Array.isArray(c.sourceScopes)||c.sourceScopes.length>2||c.sourceScopes.some(scope=>!['provided-only','specified-site-only'].includes(scope))))throw new TypeError('Invalid invocationContext.sourceScopes');
   if(c.allowedActions!==undefined&&(!Array.isArray(c.allowedActions)||c.allowedActions.some(x=>typeof x!=='string')))throw new TypeError('allowedActions must be strings');
+  const searchRestrictions=normalizeSearchRestrictions(c.searchRestrictions);
   const allowed=c.allowedActions===undefined?null:[...new Set(c.allowedActions)];
   const user=assessment.inferredConstraints||inferUserConstraints(assessment.rawText||assessment.activeText||'',assessment.activeText||'',assessment.activeClauses||[]);
   // Keep both independent restrictions. The legacy single field retains the
@@ -116,7 +118,7 @@ export function invocationConstraints(assessment={},options={}) {
   const sourceScopeIntersection=sourceScopes.length>1
     ?'Use only user-provided sources that also belong to the specified site. Check the original request and exact sources; if the intersection is empty or unclear, do not broaden it.'
     :null;
-  return {mode:c.mode??null,readOnly:assessment.readOnly===true||user.readOnly===true||c.readOnly===true||c.mode==='plan'||c.mode==='read',networkForbidden:c.networkForbidden===true||options.recoveryContext?.networkAllowed===false||user.networkForbidden===true||(allowed!==null&&!allowed.includes('network')),allowedActions:allowed,...(sourceScopes.length?{sourceScope:sourceScopes[0],sourceScopes}:{}),...(sourceScopeIntersection?{sourceScopeIntersection}:{}),...((user.preserveInputs===true||c.preserveInputs===true)?{preserveInputs:true}:{}),authority:'restriction-only'};
+  return {mode:c.mode??null,readOnly:assessment.readOnly===true||user.readOnly===true||c.readOnly===true||c.mode==='plan'||c.mode==='read',networkForbidden:c.networkForbidden===true||options.recoveryContext?.networkAllowed===false||user.networkForbidden===true||(allowed!==null&&!allowed.includes('network')),allowedActions:allowed,...(sourceScopes.length?{sourceScope:sourceScopes[0],sourceScopes}:{}),...(sourceScopeIntersection?{sourceScopeIntersection}:{}),...((user.preserveInputs===true||c.preserveInputs===true)?{preserveInputs:true}:{}),...(searchRestrictions?{searchRestrictions}:{}),authority:'restriction-only'};
 }
 export function constrainCapability(card,constraints,tool={}) {
   const gates=[...list(card.gates)],effect=card.effect??'unknown';let decision=card.decision;
@@ -152,7 +154,7 @@ export function constrainCapability(card,constraints,tool={}) {
   }
   if(constraints.preserveInputs) {if(decision==='use-now')decision='check-scope';gates.push('preserve-input-files');}
   if(card.decision==='skip')decision='skip';
-  return {...card,decision,gates:[...new Set(gates)],taskConstraints:constraints};
+  return constrainSearchCapability({...card,decision,gates:[...new Set(gates)],taskConstraints:constraints},constraints.searchRestrictions,tool);
 }
 export function constrainRecovery(plan,assessment,options={}) {
   const c=invocationConstraints(assessment,options),restricted=c.readOnly||(c.allowedActions&&!c.allowedActions.includes('install'));

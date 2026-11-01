@@ -361,6 +361,16 @@ export function inferUserConstraints(query='',activeText='',activeClauses=[]) {
   const localArtifact=/(?:编写|撰写|写出|写|输出|生成|制作|创建|新建|导出|保存).{0,15}(?:本地|磁盘|硬盘|本机).{0,20}(?:报告|文档|文件|表格|(?:数据|对照|汇总|统计|比较|费用|采购|预算|结果|计算|输出|登记|核对|工作)?表(?!达|示|述|面|现)|工作簿|脚本|代码)/u;
   const filePath='[\\p{L}\\p{N}_.\\\\/-]+\\.(?:csv|tsv|json|md|txt|pdf|docx|xlsx|pptx|html|js|mjs|py|png|jpg|svg)\\b';
   const artifactFile=new RegExp(`(?:另存|保存|写入|输出|导出)\\s*(?:到|至|为)?\\s*${filePath}|(?:编写|撰写|创建|生成|制作|交付|写)\\s*(?:一份|一个|文件|文档|脚本|报告)?\\s*${filePath}|(?:编写|撰写|写|生成|制作|创建|导出).{0,25}(?:到|至|为)\\s*${filePath}`,'iu');
+  // A deliverable directory with an explicitly named entrypoint is a
+  // requested output, not a demand to modify the user's reference inputs.
+  // Pair adjacent active clauses; quoted, future and negative instructions
+  // have already been excluded from artifactClauses. A directory inventory
+  // or design explanation is not a request to create a directory.
+  const deliverRunnableDirectory=artifactClauses.some((c,i)=>{
+    if(!/^(?:(?:请|帮我|麻烦|请你)\s*)*(?:交付|提交)\s*(?:(?:一个|一套|一份|独立的?|完整的?|可运行的?|项目|工程|源码)\s*){0,4}(?:目录|文件夹)(?!结构|清单|列表|树|名称|路径)/u.test(c))return false;
+    const nearby=c+' '+(artifactClauses[i+1]||'');
+    return new RegExp(`(?:入口|首页|主文件|主程序)\\s*(?:文件)?\\s*(?:为|是|叫|:|：)\\s*${filePath}`,'iu').test(nearby);
+  });
   const writeToFile=c=>{
     const match=/(?:写到|写至|写进)\s*(?:(?:一(?:个|份|张)|新的?|指定的?|本地的?|目标|另一个)\s*){0,3}(?:文件|文档|报告|工作簿|表格|脚本|磁盘)/u.exec(c);
     if(!match||/(?:不|无需|不必|不用|不需要)\s*(?:(?:把|将).{0,30})?(?:写到|写至|写进)/u.test(c))return false;
@@ -370,7 +380,7 @@ export function inferUserConstraints(query='',activeText='',activeClauses=[]) {
     if(/(?:说明|解释|介绍|描述|讲解|讨论).{0,25}$/u.test(before)&&/^(?:里|中|内)?(?:的)?(?:方法|办法|原理|步骤|建议|方案)/u.test(after))return false;
     return true;
   };
-  const explicitLocalOutput=artifactClauses.some(c=>localArtifact.test(c)||artifactFile.test(c)||/(?:交付|输出|保存|写入|放置|导出|存储)\s*(?:到|至|于)\s*(?:[\p{L}\p{N}_.\\/-]+[\\/]|(?:本地|指定|当前|工作)(?:目录|文件夹))/iu.test(c)
+  const explicitLocalOutput=deliverRunnableDirectory||artifactClauses.some(c=>localArtifact.test(c)||artifactFile.test(c)||/(?:交付|输出|保存|写入|放置|导出|存储)\s*(?:到|至|于)\s*(?:[\p{L}\p{N}_.\\/-]+[\\/]|(?:本地|指定|当前|工作)(?:目录|文件夹))/iu.test(c)
     ||writeToFile(c));
   const outputFile=actionable.some(c=>outputPattern.test(c))||separateOutput||explicitLocalOutput;
   const explicitGlobal=clauses.some(c=>{

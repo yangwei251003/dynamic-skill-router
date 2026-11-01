@@ -76,8 +76,8 @@ const genericHan = new Set('开始 结束 使用 制作 创建 生成 编辑 修
 const genericLatin = new Set('input output index file files page pages content task user local online offline create edit modify start stop run use used using show support result results format simple small one two'.split(' '));
 // Common actions, quantity words and output labels are useful for recall,
 // but a coincidence of several of them is not an independent task object.
-const weakEvidenceHan = new Set('改进 测试 更新 最新 清楚 提出 一份 客户 开发 本地 系统 完整 报告 统计 区间 比较 包含 记录 数量 顺序 说明 情况 主要 相关 分析 安装 优先 时间 原始 其他 复核 如果 同时 组合'.split(' '));
-const weakEvidenceLatin = new Set('category share count percent total latest update test testing report local system customer develop complete describe compare summary analysis statistics'.split(' '));
+const weakEvidenceHan = new Set('改进 测试 更新 最新 清楚 提出 一份 客户 开发 本地 系统 完整 报告 统计 区间 比较 包含 记录 数量 顺序 说明 情况 主要 相关 分析 安装 优先 时间 原始 其他 复核 如果 同时 组合 位置 区域 初始 控制 代码 网页 技能'.split(' '));
+const weakEvidenceLatin = new Set('category share count percent total latest update test testing report local system customer develop complete describe compare summary analysis statistics position area initial control code web html javascript'.split(' '));
 // Generic product suffixes do not identify a provider when qualified by a
 // distinct proper name (for example, "Example Drive"). The prefix remains
 // available as direct evidence for that provider's own skill.
@@ -197,7 +197,7 @@ function independentDescriptionHits(hits, retrieval, document) {
     const term = hit.term;
     if (/^[\p{Script=Han}]+$/u.test(term))
       return retrieval.queryWords.has(term) && !genericHan.has(term)
-        && document.positiveText.includes(term);
+        && (document.positiveWords === null || document.positiveWords.has(term));
     if (!document.positiveTerms.has(term)) return false;
     const qualifiers = retrieval.serviceQualifiers.get(term) || [];
     if (qualifiers.length && !qualifiers.some(prefix => lexicalScore(document.positiveText, prefix))) return false;
@@ -343,7 +343,7 @@ function retrievalIndex(skills, activeText, experimental = false, negativeSkillC
     const description = [skill.summaryZh, skill.description, ...list(skill.triggers)].join(' ');
     const positiveText = norm(identity + ' ' + positiveSkillText(description));
     return {identity: new Set(words(identity)), description: new Set(words(description)),
-      positiveText, positiveTerms: new Set(words(positiveText))};
+      positiveText, positiveTerms: new Set(words(positiveText)), positiveWords: queryWordSet(positiveText)};
   });
   const df = new Map();
   for (const doc of documents) for (const term of new Set([...doc.identity, ...doc.description])) df.set(term, (df.get(term) || 0) + 1);
@@ -679,6 +679,7 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
     && (!/^[\p{Script=Han}]+$/u.test(String(term))||alignedHanPhrase(active,term)));
   const specificDomain=Boolean(domainMatch&&!weakEvidence(domain));
   if(!explicit&&!serviceName&&!diagramObject&&!diagnosticNameMatch&&!agentInstructionSupported
+      &&!identityAnchor&&!specificHanTrigger&&!specificMultiwordTrigger
       &&!specificDomain&&!specificTrigger&&!substantiveHit&&!concretePair)score=0;
   if(!explicit&&concretePair&&taskObjectCompatible&&score<20)score=20;
   const recognitionTask=/(?:语音识别|语音转(?:写|文字)|\bspeech\s+recognition\b|\bautomatic\s+speech\s+recognition\b|\bspeech.to.text\b)/i.test(active);

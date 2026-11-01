@@ -1,5 +1,6 @@
 import {validateHostOptions,exactToolConsultations} from './host-context-contract.mjs';
 import {invocationConstraints,constrainCapability,prohibitedObjectOperation} from './invocation-constraints.mjs';
+import {constrainSearchCapability} from './search-restrictions.mjs';
 import {requestSegments,negativeDirective,scheduledReminderRequest,exactToolProhibited,imageObjectRemovalInquiry,imageEditInquiry,imageEditInquiryOnly,imageToolProhibitions,imageToolPurposes,webSearchToolProhibited,webSearchToolPurpose} from './request-evidence.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -495,6 +496,7 @@ function adviseCapabilitiesBase(assessment, options = {}) {
   const inventory = options.capabilityIndex || discoverCapabilities(options);
   const active = assessment.activeText || '';
   const needs=semanticNeeds(assessment);
+  const searchRestrictions=options.invocationContext?.searchRestrictions===undefined?null:invocationConstraints(assessment,options).searchRestrictions;
   const rawQuery=assessment.rawText??active;
   const imageBans=imageToolProhibitions(rawQuery),searchToolBanned=webSearchToolProhibited(rawQuery),imageInquiryOnly=imageEditInquiryOnly(rawQuery);
   const givenPhase=options.phase||options.invocationContext?.phase;
@@ -675,14 +677,15 @@ function adviseCapabilitiesBase(assessment, options = {}) {
     if (op.effect==='high-impact' || op.effect==='external-write') gates.push('check-destination-and-current-action-authorization');
     if(uncertainImagePurpose){if(decision!=='skip')decision='defer';gates.push('image-category-prohibition-purpose-unverified');}
     if((editPurposeMissing||imageInquiryOnly&&imagePurpose.edit)&&decision!=='skip'){decision='defer';gates.push(editPurposeMissing?'image-edit-purpose-unverified':'image-edit-inquiry-not-execution');}
-    cards.push({id:entry.id,kind:entry.kind,name:entry.name,plugin:entry.plugin || null,server:entry.server || null,
+    const card={id:entry.id,kind:entry.kind,name:entry.name,plugin:entry.plugin || null,server:entry.server || null,
       description:entry.description.slice(0,240),score,explicit,matchedTerms:shared.slice(0,6),
       ...(semantic?{intentMatches:unique(semantics.map(match=>match.kind)),purposeEvidence:{source:'tool-description',text:purpose.slice(0,240)},inputEvidence:inputEvidence(assessment,semantics)}:{}),
       availability:{discovered:true,enabled:entry.enabled,callable,evidence:runtimeRecord?'runtime-tool':entry.evidence,...(entry.kind==='tool'?{declaredAvailable,authentication:'unknown',businessOutcome:'unknown'}:{})},
       decision,phase:op.phase,when:decision==='defer'?(gates.includes('different-specified-provider')?'当前请求指定其他同类来源；确有该来源需求时再核对':gates.includes('read-effects-unverified')?'当前可核对精确 schema 和只读效果，确认符合范围后再用':'仅到相应阶段且用户目标需要时再评估'):decision==='discover-first'?'先按需发现工具或读取相关技能，确认当前会话可用':`当前 ${phase} 阶段，且缺少其能提供的结果时`,
       expectedBenefit:OUTCOME[op.phase] || OUTCOME[phase],effect:op.effect,gates,
       invocation:{tool:entry.kind==='tool'?entry.name:null,argumentPolicy:'Use the host tool schema and actual task inputs; do not invent parameters.',executor:'host-agent',automaticallyExecuted:false},
-      reason:explicit?'用户在当前任务中点名此能力':semantic?`当前任务与工具用途匹配：${semantic.kind}；仍需核对参数、效果和授权`:`任务与能力共有具体信号：${shared.slice(0,4).join('、')}`});
+      reason:explicit?'用户在当前任务中点名此能力':semantic?`当前任务与工具用途匹配：${semantic.kind}；仍需核对参数、效果和授权`:`任务与能力共有具体信号：${shared.slice(0,4).join('、')}`};
+    cards.push(constrainSearchCapability(card,searchRestrictions,entry));
   }
   const order = {'use-now':0,'check-scope':0,'discover-first':1,'defer':2,'skip':3};
   cards.sort((a,b)=>order[a.decision]-order[b.decision] || b.score-a.score || a.id.localeCompare(b.id));
