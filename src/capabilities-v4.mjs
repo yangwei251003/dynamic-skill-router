@@ -220,8 +220,12 @@ function semanticNeeds(assessment) {
       if(!info&&/(?:搜索|检索|查找|寻找|找|\b(?:search|find|look for)\b)/i.test(clause))needs.push({kind:'image-search',clause,source});
     }
     if(!info&&ARTIFACT_ACTION.test(clause))for(const item of ARTIFACT_TYPES)if(item.request.test(clause))needs.push({kind:item.kind,clause});
-    const search=/(?:联网|网上|在线|网络|网页|网站|官网|官方|internet|online|web|official|\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b)/i.test(clause)&&/(?:搜索|检索|查找|查询|核验|核实|查证|查|\b(?:search|find|verify|research|look up|check)\b)/i.test(clause);
-    const open=/(?:阅读|读取|浏览|打开|查看|访问|\b(?:read|open|browse|visit|fetch)\b).{0,45}(?:网页|网址|网站|链接|页面|https?:\/\/|\b(?:page|url|link|website)\b)/i.test(clause);
+    // Keep explicit negative web actions from becoming affirmative needs, even
+    // when the higher-level clause filter retained a short “不打开” phrase.
+    const webClause=clause.replace(/(?:不要|不得|禁止|不能|请勿|不必|无需|无须|不需要|别|不)\s*(?:再|主动|直接|自行|实际|擅自|去)?\s*(?:打开|访问|读取|阅读|浏览|查看|读出|搜索|检索|查找|查询|核验|核实|查证)/g,'');
+    const search=/(?:联网|网上|在线|网络|网页|网站|官网|官方|internet|online|web|official|\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b)/i.test(webClause)&&/(?:搜索|检索|查找|查询|核验|核实|查证|查|\b(?:search|find|verify|research|look up|check)\b)/i.test(webClause);
+    const open=/(?:阅读|读取|浏览|打开|查看|访问|\b(?:read|open|browse|visit|fetch)\b).{0,45}(?:网页|网址|网站|链接|页面|https?:\/\/|\b(?:page|url|link|website)\b)/i.test(webClause)
+      ||(!info&&/(?:网页|网址|网站|链接|页面|\b(?:page|url|link|website)\b|https?:\/\/[^\s<>"，。！？、；）)]+).{0,45}(?:阅读|读取|读出|浏览|打开|查看|访问|\b(?:read|open|browse|visit|fetch)\b)/i.test(webClause));
     if(search)needs.push({kind:'web-search',clause});
     if(open)needs.push({kind:'web-open',clause});
   }

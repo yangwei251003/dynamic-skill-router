@@ -31,7 +31,25 @@ export function constrainRecovery(plan,assessment,options={}) {
   const siteOnly=c.sourceScope==='specified-site-only';
   if(!c.networkForbidden&&!restricted&&!noExtraSources&&!siteOnly)return {...plan,taskConstraints:c};
   const researchBlocked=c.networkForbidden||noExtraSources;
-  return {...plan,taskConstraints:c,...(researchBlocked?{networkForbidden:c.networkForbidden,externalResearchRequired:false,searchQueries:[],searchTools:{web:null,marketplace:null,repositories:null},networkBlocker:c.networkForbidden?'Current restrictions prohibit remote retrieval; use supplied/local evidence or report the missing input.':'Use only the user-provided sources; a provided URL may still be opened if network use is otherwise permitted.'}:siteOnly?{searchQueries:list(plan.searchQueries).filter(q=>q.channel==='web'),searchTools:{...plan.searchTools,marketplace:null,repositories:null},sourceRestriction:'Use only the user-specified site as evidence; do not infer its domain from a brand name.'}:{}),
-    steps:list(plan.steps).map(s=>s.id==='install'&&restricted?{...s,required:false,allowed:false,action:'Installation is outside the current restricted scope; report the gap without installing.'}:s.id==='install'&&c.networkForbidden?{...s,required:false,action:'If installation is authorized and necessary, use only already available local packages; do not access a network or remote registry.',networkAllowed:false}:s.id==='research'&&researchBlocked?{...s,required:false,action:'Use only permitted supplied/local evidence; do not fetch additional sources.'}:s.id==='discover-tools'&&researchBlocked?{...s,required:false,action:'Inspect already available local tools only; do not query remote registries.'}:s),
-    installPolicy:{...plan.installPolicy,...(c.networkForbidden?{networkAllowed:false,networkRestriction:'Only already available local packages may be considered; no remote registry or download.'}:{}),...(restricted?{allowed:false,authorization:'Current host restrictions do not permit installation.'}:{})}};
+  const sourceRestricted=noExtraSources||siteOnly;
+  const sourceRestriction=noExtraSources
+    ?'Use only user-provided sources. If network use is otherwise permitted, an explicitly provided URL may still be opened; do not search for additional sources.'
+    :'Use only the user-specified site as evidence. Confirm the site before searching; do not infer its domain from a brand name.';
+  // A generic web query is not confined to the specified site. Leave query
+  // construction to the host after it has established the permitted site.
+  const boundedSearch=researchBlocked
+    ?{networkForbidden:c.networkForbidden,externalResearchRequired:false,searchQueries:[],searchTools:{web:null,marketplace:null,repositories:null},networkBlocker:c.networkForbidden?'Current restrictions prohibit remote retrieval; use supplied/local evidence or report the missing input.':null,...(!c.networkForbidden&&noExtraSources?{sourceBlocker:sourceRestriction}:{}),missingQueryInput:null}
+    :siteOnly?{searchQueries:[],searchTools:{...plan.searchTools,marketplace:null,repositories:null},missingQueryInput:'Before searching, confirm the user-specified site and constrain the query to it; do not infer its domain.'}:{};
+  return {...plan,taskConstraints:c,...boundedSearch,...(sourceRestricted?{sourceRestriction}:{}),
+    steps:list(plan.steps).map(s=>{
+      if(s.id==='install'&&restricted)return {...s,required:false,allowed:false,action:'Installation is outside the current restricted scope; report the gap without installing.'};
+      if(s.id==='install'&&c.networkForbidden)return {...s,required:false,action:'If installation is authorized and necessary, use only already available local packages; do not access a network or remote registry.',networkAllowed:false};
+      if(s.id==='install'&&sourceRestricted)return {...s,required:false,action:'Use existing tools first. Do not infer permission to install; any separately authorized installation must respect the source and network restrictions.',condition:'Installation is separately authorized, needed and consistent with the specified source and network scope.'};
+      if(s.id==='research'&&researchBlocked)return {...s,required:false,action:c.networkForbidden?'Use only permitted local evidence; do not access the network.':'Use only supplied evidence; an explicitly provided URL may be opened if network use is otherwise permitted.'};
+      if(s.id==='research'&&siteOnly)return {...s,action:'Consult only the user-specified site; confirm its domain before searching and do not infer it from a brand name.'};
+      if(s.id==='discover-tools'&&(researchBlocked||siteOnly))return {...s,required:false,action:'Inspect already available local tools; do not query unrestricted remote registries or sources.'};
+      if(s.id==='return-and-verify'&&c.readOnly)return {...s,action:'Return to the original task using permitted read-only actions and verify the result without making changes.'};
+      return s;
+    }),
+    installPolicy:{...plan.installPolicy,...(c.networkForbidden?{networkAllowed:false,networkRestriction:'Only already available local packages may be considered; no remote registry or download.'}:{}),...(sourceRestricted?{sourceRestriction:'Any separately authorized acquisition must comply with the user’s source and network scope; installed tools are preferred.'}:{}),...(restricted?{allowed:false,authorization:'Current user or host restrictions do not permit installation.'}:{})}};
 }
