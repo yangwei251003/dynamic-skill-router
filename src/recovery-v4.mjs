@@ -1,4 +1,5 @@
 import {constrainRecovery,invocationConstraints} from './invocation-constraints.mjs';
+import {exactToolProhibited,webSearchToolProhibited,webSearchToolPurpose} from './request-evidence.mjs';
 const list=x=>Array.isArray(x)?x:[];
 const clean=x=>String(x||'').trim();
 
@@ -25,12 +26,17 @@ function planRecoveryBase(assessment, options = {}) {
   const mandatoryResearch=rejected||low||repeated||(blocked&&state.confidence!=='high');
   const networkForbidden=invocationConstraints(assessment,options).networkForbidden;
   const need=searchPhrase(state.capabilityNeed || options.taskContext?.domain || '');
-  const names=[...list(options.runtimeTools).filter(x=>x?.available!==false).map(x=>x.name),...list(options.runtimeCapabilities?.tools)];
+  const rawQuery=assessment.rawText??assessment.activeText??'',searchToolBanned=webSearchToolProhibited(rawQuery);
+  const permittedTool=tool=>typeof tool?.name==='string'&&!exactToolProhibited(rawQuery,tool.name)&&!(searchToolBanned&&webSearchToolPurpose(tool.description,tool.name));
+  const runtimeTools=list(options.runtimeTools),knownNames=new Set(runtimeTools.map(x=>x?.name).filter(x=>typeof x==='string'));
+  // A legacy name-only entry cannot override a same-name runtime record that
+  // is unavailable or whose described purpose is prohibited.
+  const names=[...runtimeTools.filter(x=>x?.available!==false&&permittedTool(x)).map(x=>x.name),...list(options.runtimeCapabilities?.tools).filter(name=>!knownNames.has(name)&&permittedTool({name}))];
   const find=pattern=>names.find(x=>typeof x==='string'&&pattern.test(x))||null;
   const searchTools={web:find(/^(?:web__run)$|websearch|web_search|search_web|firecrawl_search/),marketplace:find(/plugin_management_search_plugins|search_plugins$/),repositories:find(/search_repositories|search_repos$/)};
   const steps=triggered?[
     {id:'diagnose',action:'State the failed acceptance condition and specific capability gap; inspect current evidence and reusable local tools.',required:true},
-    {id:'research',action:networkForbidden?'Respect the no-network constraint; inspect local docs/tools and report the specific remaining gap.':'Search official documentation, exact technical symptoms, and relevant resources. User rejection or low confidence requires new external evidence, not another unsupported rewrite.',required:mandatoryResearch&&!networkForbidden},
+    {id:'research',action:networkForbidden?'Respect the no-network constraint; inspect local docs/tools and report the specific remaining gap.':searchToolBanned?'Consult permitted official documentation and relevant sources without using prohibited web-search tools.':'Search official documentation, exact technical symptoms, and relevant resources. User rejection or low confidence requires new external evidence, not another unsupported rewrite.',required:mandatoryResearch&&!networkForbidden},
     {id:'discover-tools',action:'If a tool can close the gap, search the host plugin directory and maintained open-source projects; compare a small shortlist against the actual task.',required:false,condition:'Missing capability remains or a candidate materially improves the result.'},
     {id:'install',action:'Use an existing tool first; otherwise install the smallest relevant, verified and compatible tool through the supported host/package mechanism, then confirm it is actually callable.',required:false,condition:'Candidate adds necessary capability and its setup cost is justified; host permissions and authentication requirements are satisfied.'},
     {id:'return-and-verify',action:'Return to the original task immediately, apply the capability, and verify against the previously failed acceptance condition. Remove or roll back ineffective task-local additions where appropriate.',required:true},
@@ -40,7 +46,7 @@ function planRecoveryBase(assessment, options = {}) {
     networkBlocker:mandatoryResearch&&networkForbidden?'External research is needed but current user/host restrictions prohibit it. Do not bypass them.':null,
     capabilityNeed:need||null,searchTools,
     searchQueries:triggered&&!networkForbidden&&need?[
-      {channel:'web',query:`${need} official documentation troubleshooting`},
+      ...(!searchToolBanned?[{channel:'web',query:`${need} official documentation troubleshooting`}]:[]),
       {channel:'repositories',query:`${need} archived:false`,ranking:['task-fit','maintenance-and-releases','license-and-platform','verified-example','stars-as-secondary-signal']},
       {channel:'marketplace',query:need},
     ]:[],

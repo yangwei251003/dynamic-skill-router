@@ -1,5 +1,5 @@
 import {invocationConstraints,constrainCapability} from './invocation-constraints.mjs';
-import {requestSegments,exactToolProhibited,imageToolProhibitions,imageToolPurposes} from './request-evidence.mjs';
+import {requestSegments,exactToolProhibited,imageToolProhibitions,imageToolPurposes,imageEditInquiryOnly,webSearchToolProhibited,webSearchToolPurpose} from './request-evidence.mjs';
 export function validateHostOptions(options={}) {
   const context=options.taskContext;
   if(context!==undefined&&(!context||typeof context!=='object'||Array.isArray(context)))throw new TypeError('taskContext must be an object');
@@ -14,16 +14,20 @@ export function validateHostOptions(options={}) {
   invocationConstraints({},options);return options;
 }
 export function exactToolConsultations(query,assessment,options={}) {
-  validateHostOptions(options);const cards=[],seen=new Set(),c=invocationConstraints({...assessment,rawText:query},options),imageBans=imageToolProhibitions(query);
+  validateHostOptions(options);const cards=[],seen=new Set(),c=invocationConstraints({...assessment,rawText:query},options),imageBans=imageToolProhibitions(query),searchToolBanned=webSearchToolProhibited(query),imageInquiryOnly=imageEditInquiryOnly(query);
   for(const request of options.taskContext?.capabilityRequests??[]){
     if(!request.evidenceRefs.every(ref=>String(query).includes(ref)&&String(assessment.activeText??'').includes(ref)))continue;
     for(const name of request.toolNames){
       const tool=(options.runtimeTools??[]).find(t=>t?.name===name);if(!tool||tool.available===false||seen.has(name)||exactToolProhibited(query,name))continue;seen.add(name);
+      if(searchToolBanned&&webSearchToolPurpose(tool.description,name))continue;
       const imagePurpose=imageToolPurposes(tool.description);
       if((imageBans.create&&imagePurpose.create)||(imageBans.edit&&imagePurpose.edit))continue;
       const uncertainImagePurpose=(imageBans.create||imageBans.edit)&&!imagePurpose.create&&!imagePurpose.edit&&request.evidenceRefs.some(ref=>/(?:图片|图像|照片|插画|截图|修图|\b(?:image|photo|picture)\b)/iu.test(ref));
       const read=tool.annotations?.readOnlyHint===true&&tool.annotations?.destructiveHint!==true;
-      cards.push(constrainCapability({name,toolNames:[name],explicit:false,source:'host-consultation',decision:uncertainImagePurpose?'defer':tool.available===true?'consult':'defer',effect:read?'read':'unknown',availability:{callable:tool.available===true?true:null,evidence:'current-runtime-tool-record'},evidenceRefs:[...request.evidenceRefs],reason:request.reason??'Host-proposed consultation supported by current query evidence.',gates:['inspect-exact-schema-and-inputs','host-context-is-not-user-authorization','access-and-effects-not-yet-verified',...(uncertainImagePurpose?['image-category-prohibition-purpose-unverified']:[])],advisoryOnly:true,invocation:{tool:name,executor:'host-agent',automaticallyExecuted:false}},c,tool));
+      const inquiryOnly=imageInquiryOnly&&imagePurpose.edit;
+      const active=String(assessment.activeText??'');
+      const missingEditPurpose=imagePurpose.create&&!imagePurpose.edit&&/(?:图片|图像|照片|插画|截图|\b(?:images?|photos?|pictures?)\b)/iu.test(active)&&/(?:编辑|修改|修图|调整|\b(?:edit|modify|retouch)\b)/iu.test(active);
+      cards.push(constrainCapability({name,toolNames:[name],explicit:false,source:'host-consultation',decision:uncertainImagePurpose||inquiryOnly||missingEditPurpose?'defer':tool.available===true?'consult':'defer',effect:read?'read':'unknown',availability:{callable:tool.available===true?true:null,evidence:'current-runtime-tool-record'},evidenceRefs:[...request.evidenceRefs],reason:request.reason??'Host-proposed consultation supported by current query evidence.',gates:['inspect-exact-schema-and-inputs','host-context-is-not-user-authorization','access-and-effects-not-yet-verified',...(uncertainImagePurpose?['image-category-prohibition-purpose-unverified']:[]),...(inquiryOnly?['image-edit-inquiry-not-execution']:[]),...(missingEditPurpose?['image-edit-purpose-unverified']:[])],advisoryOnly:true,invocation:{tool:name,executor:'host-agent',automaticallyExecuted:false}},c,tool));
     }
   }return cards;
 }

@@ -33,7 +33,7 @@ V3 调用方继续使用 [V3 契约](references/router-contract.md)；V4 字段�
 
 ## 插件与 MCP 能力（V4.1）
 
-执行联合路由或实际采用插件/MCP 前，阅读 [联合能力路由契约](references/capability-routing.md)。初始 route_task 自动扫描；传当前真实 runtimeTools 才能判断具体工具可调用性。阶段变化用 search_capabilities 复用 routeId。先核对具体任务收益、阶段、输入及既有授权，再由宿主调用精确工具；不重复全量扫描、不只停留在推荐列表。原生方法足够时跳过工具。
+执行联合路由或实际采用插件/MCP 前，阅读 [联合能力路由契约](references/capability-routing.md)。初始 route_task 自动扫描；传当前真实 runtimeTools 才能判断具体工具可调用性。阶段变化用 search_capabilities 复用 routeId。先核对具体任务收益、阶段、输入及既有授权，再由宿主调用精确工具；不重复全量扫描、不只停留在推荐列表。原生方法足够时跳过工具。区分工具类别禁令、特定动作禁令与全面禁网；用途不明时先核对，不凭路由建议推断权限或真实能力。
 
 ## 遇阻、质量反馈与快速路径（V4.2）
 

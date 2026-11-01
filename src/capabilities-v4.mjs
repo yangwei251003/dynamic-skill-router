@@ -1,6 +1,6 @@
 import {validateHostOptions,exactToolConsultations} from './host-context-contract.mjs';
 import {invocationConstraints,constrainCapability} from './invocation-constraints.mjs';
-import {requestSegments,negativeDirective,exactToolProhibited,imageObjectRemovalInquiry,imageToolProhibitions,imageToolPurposes} from './request-evidence.mjs';
+import {requestSegments,negativeDirective,exactToolProhibited,imageObjectRemovalInquiry,imageEditInquiry,imageEditInquiryOnly,imageToolProhibitions,imageToolPurposes,webSearchToolProhibited,webSearchToolPurpose} from './request-evidence.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -206,7 +206,7 @@ function semanticNeeds(assessment) {
       .replace(/\b(?:do not|don't|never|without)\s+(?:actually\s+|directly\s+)?(?:generate|create|draw|make|render|edit|modify|retouch|blur|soften|defocus|remove|erase|delete)\b/gi,'');
     const picture=PICTURE.test(imageClause);
     if(picture) {
-      const source=/(?:附件|附图|上传的|所附|\b(?:attached|attachment|uploaded)\b)/i.test(clause)?'attachment'
+      const source=/(?:附件|附图|上传的?|所附|\b(?:attached|attachment|uploaded)\b)/i.test(clause)?'attachment'
         :/(?:刚发|刚才发|刚刚发|刚发送|\bjust sent\b)/i.test(clause)?'conversation-image'
         :/(?:本地|文件|磁盘|\b(?:local|filesystem|file)\b|[a-z]:[\\/])/i.test(clause)?'local'
           :/https?:\/\//i.test(clause)?'url':'unspecified';
@@ -219,7 +219,7 @@ function semanticNeeds(assessment) {
       const iconCodeOnly=!explicitIconAsset&&(/(?:图标|\bicons?\b).{0,24}(?:组件|代码|源码|纯\s*(?:css|svg)|\b(?:component|code|source)\b)|(?:图标组件|icon\s+component)/i.test(imageClause)
         ||/(?:react|css|svg).{0,20}(?:代码|源码|组件|\b(?:code|component)\b).{0,24}(?:生成|绘制|画|制作|\b(?:generate|create|draw|render)\b).{0,24}(?:图标|\bicons?\b)/i.test(imageClause));
       const visualCodeOnly=/(?:图片|图像|插画|插图)(?:的)?(?:组件|代码|源码)|\b(?:image|illustration|picture)\s+(?:component|code)\b|\b(?:image|illustration|picture)\s+as\s+(?:an?\s+)?(?:react\s+)?component\b/i.test(imageClause);
-      const edit=/(?:修改|编辑|调整|替换|美化|抠图|去背景|更换|修复|虚化|模糊|透明化)(?:(?:一下|这张|这幅|那张|那幅|这些|该|现有的?|原有的?|已有的?|我上传的|上传的|给定的|提供的|产品)){0,5}(?:图片|图像|照片|插画|插图|海报|截图|图标|图)|(?:图片|图像|照片|插画|插图|海报|截图|图标|(?:这|那)(?:张|幅)图)(?:(?:的?(?:背景|颜色|内容|细节|风格|元素)|的)|进行|做|整体)?(?:修改|编辑|调整|替换|美化|抠图|去背景|更换|修复|改成|改为|变成|变为|换成|换为|变透明|透明化|虚化|模糊)/i.test(imageClause)
+      const edit=/(?:修改|编辑|调整|替换|美化|抠图|去背景|更换|修复|虚化|模糊|透明化)(?:(?:一下|这张|这幅|那张|那幅|这些|该|现有的?|原有的?|已有的?|我上传的?|上传的?|给定的|提供的|产品)){0,5}(?:图片|图像|照片|插画|插图|海报|截图|图标|图)|(?:图片|图像|照片|插画|插图|海报|截图|图标|(?:这|那)(?:张|幅)图)(?:(?:的?(?:背景|颜色|内容|细节|风格|元素)|的)|进行|做|整体)?(?:修改|编辑|调整|替换|美化|抠图|去背景|更换|修复|改成|改为|变成|变为|换成|换为|变透明|透明化|虚化|模糊)/i.test(imageClause)
         ||imageAction(imageClause,'(?:edit|modify|retouch|alter|change|replace)','(?:editing|modification|retouching)')
         ||/\b(?:edit|modify|retouch|alter|change)\b.{0,28}\bicons?\b/i.test(imageClause)
         ||/(?:去除|去掉|移除|抠除|更换|删除|虚化|模糊|\b(?:remove|erase|replace|blur|soften|defocus)\b).{0,28}(?:背景|background).{0,35}(?:图片|图像|照片|图标|\b(?:image|photo|photograph|picture|icon)\b)|(?:图片|图像|照片|图标|\b(?:image|photo|photograph|picture|icon)\b).{0,28}(?:背景|background).{0,20}(?:去除|去掉|移除|抠除|更换|删除|虚化|模糊|\b(?:remove|erase|replace|blur|soften|defocus)\b)|(?:去除|去掉|移除|抠除|更换|删除|虚化|模糊|\b(?:remove|erase|replace|blur|soften|defocus)\b).{0,28}(?:图片|图像|照片|图标|\b(?:image|photo|photograph|picture|icon)\b).{0,16}(?:背景|background)/i.test(imageClause);
@@ -233,11 +233,11 @@ function semanticNeeds(assessment) {
           ||/(?:移除|去除|去掉|删除|删掉|擦除|抹去|抹掉).{0,16}(?:图片|图像|照片|插画|截图)(?:中|里|内|上)(?:的)?[^，。；;！？!?]{1,20}/i.test(imageClause)
           ||/\b(?:remove|erase)\b.{1,45}\bfrom\s+(?:(?:the|a|an|attached|uploaded|provided|existing|original)\s+){0,6}(?:images?|photos?|photographs?|pictures?)\b/i.test(imageClause));
       const removalDiscussion=/^(?:(?:请|帮我|请你|麻烦|please)\s*)*(?:查看|阅读|观察|描述|分析|判断|评估|解释|说明|比较|\b(?:view|inspect|describe|analy[sz]e|explain|compare)\b).{0,80}(?:移除|去除|去掉|删除|删掉|擦除|抹去|\b(?:remove|erase)\b).{0,30}(?:程度|效果|状态|原因|含义|\b(?:effect|appearance|degree)\b)/i.test(imageClause);
-      const removalInquiry=imageObjectRemovalInquiry(imageClause);
+      const removalInquiry=imageObjectRemovalInquiry(imageClause),editInquiry=imageEditInquiry(imageClause);
       const read=/(?:查看|阅读|读取|观察|识别|检查|看一下|解释|描述|分析|\b(?:view|read|inspect|examine|describe|analy[sz]e|interpret|look at)\b)/i.test(clause);
       if(!info&&create&&((nonIconCreate&&!visualCodeOnly)||(iconCreate&&!iconCodeOnly)))needs.push({kind:'image-create',clause,source});
-      if(!info&&(edit||objectRemoval)&&!backgroundDiscussion&&!removalDiscussion&&!removalInquiry&&!iconCodeOnly)needs.push({kind:'image-edit',clause,source});
-      if(read&&!create&&(!(edit||objectRemoval)||backgroundDiscussion||removalDiscussion||removalInquiry)&&(!info||actualInput))needs.push({kind:'image-read',clause,source});
+      if(!info&&(edit||objectRemoval)&&!backgroundDiscussion&&!removalDiscussion&&!removalInquiry&&!editInquiry&&!iconCodeOnly)needs.push({kind:'image-edit',clause,source});
+      if(read&&!create&&(!(edit||objectRemoval)||backgroundDiscussion||removalDiscussion||removalInquiry||editInquiry)&&(!info||actualInput))needs.push({kind:'image-read',clause,source});
       if(!info&&/(?:搜索|检索|查找|寻找|找|\b(?:search|find|look for)\b)/i.test(clause))needs.push({kind:'image-search',clause,source});
     }
     if(!info&&ARTIFACT_ACTION.test(clause))for(const item of ARTIFACT_TYPES)if(item.request.test(clause))needs.push({kind:item.kind,clause});
@@ -291,10 +291,8 @@ function semanticMatches(entry,needs) {
   // For generic multi-operation web tools inspect named operation examples too.
   const purpose=purposeText(entry.description);
   const full=String(entry.description||'').slice(0,1600);
-  const make=imageAction(purpose,'(?:generat(?:e|es|ed|ing)|creat(?:e|es|ed|ing)|draw(?:s|n|ing)?|render(?:s|ed|ing)?)','(?:generation|creation|rendering)')||/(?:生成|创建|绘制|渲染)(?:一张|一个|新的|新|指定的|目标)?(?:图片|图像|照片|插画)/.test(purpose);
-  const edit=imageAction(purpose,'(?:edit(?:s|ed|ing)?|modif(?:y|ies|ied|ying)|retouch(?:es|ed|ing)?|alter(?:s|ed|ing)?|restyl(?:e|es|ed|ing))','(?:editing|modification|retouching)')
-    ||/\b(?:remove|erase|replace)\s+(?:the\s+)?backgrounds?\s+(?:from|of)\s+(?:(?:the|a|an|existing|supplied|provided)\s+)*(?:images?|photos?|photographs?|pictures?)\b/i.test(purpose)
-    ||/(?:编辑|修改|修饰|调整)(?:已有的?|现有的?|上传的|指定的)?(?:图片|图像|照片|插画)|(?:图片|图像|照片|插画)(?:进行|的)?(?:编辑|修改|修饰|调整)/.test(purpose);
+  const imagePurpose=imageToolPurposes(entry.description);
+  const make=imagePurpose.create,edit=imagePurpose.edit;
   const read=imageAction(purpose,'(?:view(?:s|ed|ing)?|read(?:s|ing)?|inspect(?:s|ed|ing)?|examine(?:s|d)?|analy[sz](?:e|es|ed|ing)|recogniz(?:e|es|ed|ing))','(?:viewing|inspection|analysis)')||/(?:查看|读取|识别|分析)(?:本地的?|已有的?|指定的|上传的)?(?:图片|图像|照片)/.test(purpose);
   const searchImages=imageAction(purpose,'(?:search(?:es|ed|ing)?|find(?:s|ing)?)','(?:search|retrieval)')||/(?:搜索|检索|查找)(?:网络|在线|网页)?(?:图片|图像|照片|插画)/.test(purpose);
   const web=/\b(?:internet|web|online|browser|website)\b/i.test(purpose);
@@ -353,7 +351,8 @@ function adviseCapabilitiesBase(assessment, options = {}) {
   const inventory = options.capabilityIndex || discoverCapabilities(options);
   const active = assessment.activeText || '';
   const needs=semanticNeeds(assessment);
-  const imageBans=imageToolProhibitions(assessment.rawText??active);
+  const rawQuery=assessment.rawText??active;
+  const imageBans=imageToolProhibitions(rawQuery),searchToolBanned=webSearchToolProhibited(rawQuery),imageInquiryOnly=imageEditInquiryOnly(rawQuery);
   const givenPhase=options.phase||options.invocationContext?.phase;
   const phase = (!givenPhase||givenPhase==='auto')&&needs.some(n=>n.kind==='image-create'||n.kind==='image-edit'||n.kind.startsWith('artifact-edit:'))?'implementation':currentPhase(active,givenPhase);
   const pureImageTask=needs.length>0&&needs.every(n=>n.kind.startsWith('image-'));
@@ -380,13 +379,14 @@ function adviseCapabilitiesBase(assessment, options = {}) {
   for (const entry of inventory.capabilities) {
     if (!entry.enabled) continue;
     if (entry.kind==='tool' && exactToolProhibited(assessment.rawText??assessment.activeText,entry.name)) continue;
+    if (entry.kind==='tool' && searchToolBanned && webSearchToolPurpose(entry.description,entry.name)) continue;
     const runtimeRecord=entry.kind==='tool'?(options.runtimeTools||[]).find(t=>t.name===entry.name):null;
     if(runtimeRecord?.available===false)continue;
     const callable=runtimeRecord?true:entry.callable;
     const declaredAvailable=typeof runtimeRecord?.available==='boolean'?runtimeRecord.available:entry.declaredAvailable??null;
     if (entry.kind==='mcp' && entry.tools.length) continue; // Tools provide the actionable granularity.
     const semantics=semanticMatches(entry,needs).filter(match=>!(match.kind==='image-create'&&imageBans.create)&&!(match.kind==='image-edit'&&imageBans.edit)),semantic=semantics[0];
-    const imagePurpose=(imageBans.create||imageBans.edit)?imageToolPurposes(entry.description):{create:false,edit:false};
+    const imagePurpose=imageToolPurposes(entry.description);
     const imageRestrictionGates=[...(imageBans.create&&imagePurpose.create?['user-prohibits-image-generation']:[]),...(imageBans.edit&&imagePurpose.edit?['user-prohibits-image-edit']:[])];
     // A ban on a class of tools also excludes mixed-purpose tools whose stated
     // purpose includes that class, regardless of the operation planned now.
@@ -403,6 +403,8 @@ function adviseCapabilitiesBase(assessment, options = {}) {
       const escaped=String(x).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
       return new RegExp(`(?:\\$|使用\\s*|调用\\s*|用\\s*|use\\s+|invoke\\s+)${escaped}(?=$|[^a-z0-9_-])`,'i').test(active);
     });
+    const editPurposeMissing=imagePurpose.create&&!imagePurpose.edit&&needs.some(n=>n.kind==='image-edit')&&!needs.some(n=>n.kind==='image-create')&&!semantics.some(n=>!n.kind.startsWith('image-'));
+    if(editPurposeMissing&&!explicit)continue;
     const uncertainImagePurpose=(imageBans.create||imageBans.edit)&&!imagePurpose.create&&!imagePurpose.edit&&explicit
       && needs.some(n=>n.kind==='image-create'||n.kind==='image-edit')&&!semantics.some(n=>!n.kind.startsWith('image-'));
     const provider=toolProvider(entry), providerParts=provider.split('-');
@@ -466,6 +468,7 @@ function adviseCapabilitiesBase(assessment, options = {}) {
     if (competingProvider && decision!=='skip') {decision='defer';gates.push('different-specified-provider');}
     if (op.effect==='high-impact' || op.effect==='external-write') gates.push('check-destination-and-current-action-authorization');
     if(uncertainImagePurpose){if(decision!=='skip')decision='defer';gates.push('image-category-prohibition-purpose-unverified');}
+    if((editPurposeMissing||imageInquiryOnly&&imagePurpose.edit)&&decision!=='skip'){decision='defer';gates.push(editPurposeMissing?'image-edit-purpose-unverified':'image-edit-inquiry-not-execution');}
     cards.push({id:entry.id,kind:entry.kind,name:entry.name,plugin:entry.plugin || null,server:entry.server || null,
       description:entry.description.slice(0,240),score,explicit,matchedTerms:shared.slice(0,6),
       ...(semantic?{intentMatches:unique(semantics.map(match=>match.kind)),purposeEvidence:{source:'tool-description',text:purpose.slice(0,240)},inputEvidence:inputEvidence(assessment,semantics)}:{}),
