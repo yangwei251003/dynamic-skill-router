@@ -1,0 +1,180 @@
+{
+  "schemaVersion": 1,
+  "baseline": {
+    "version": "4.2.0",
+    "fileCount": 65,
+    "snapshotManifestSha256": "1bc4de4047669f4a387f3a58837300aeade6fa600513e3e7e72383347ba016d9",
+    "productionSourceBindingSha256": "bf981884ab3d2565bf4d146d8a045ce86a07eefe3542038de4459340d137ce9f"
+  },
+  "cases": [
+    {
+      "query": "你好",
+      "expected": {
+        "task": {
+          "objective": "你好",
+          "actions": [],
+          "deliverables": [],
+          "domain": null,
+          "explicitSkills": [],
+          "constraints": [],
+          "complexity": "simple",
+          "taskType": "general",
+          "complexityEvidence": [],
+          "development": false,
+          "complexDevelopment": false,
+          "selfContainedFunction": false,
+          "readOnly": false,
+          "activeText": "你好",
+          "activeClauses": [
+            "你好"
+          ],
+          "excludedContext": {
+            "futureClauses": 0,
+            "negativeClauses": 0
+          }
+        },
+        "consultCandidates": [],
+        "capabilityCandidates": [],
+        "performance": {
+          "mode": "fast",
+          "scannedSkills": false,
+          "scannedCapabilities": false,
+          "reason": "Native capability is sufficient; no blocker or explicit discovery request."
+        },
+        "budget": {
+          "consultCardLimit": 0,
+          "fullReadLimit": 0,
+          "softTokenLimit": 0
+        }
+      }
+    },
+    {
+      "query": "计算 7+9",
+      "expected": {
+        "task": {
+          "objective": "计算 7+9",
+          "actions": [],
+          "deliverables": [],
+          "domain": null,
+          "explicitSkills": [],
+          "constraints": [],
+          "complexity": "simple",
+          "taskType": "general",
+          "complexityEvidence": [],
+          "development": false,
+          "complexDevelopment": false,
+          "selfContainedFunction": false,
+          "readOnly": false,
+          "activeText": "计算 7+9",
+          "activeClauses": [
+            "计算 7+9"
+          ],
+          "excludedContext": {
+            "futureClauses": 0,
+            "negativeClauses": 0
+          }
+        },
+        "consultCandidates": [],
+        "capabilityCandidates": [],
+        "performance": {
+          "mode": "fast",
+          "scannedSkills": false,
+          "scannedCapabilities": false,
+          "reason": "Native capability is sufficient; no blocker or explicit discovery request."
+        },
+        "budget": {
+          "consultCardLimit": 0,
+          "fullReadLimit": 0,
+          "softTokenLimit": 0
+        }
+      }
+    },
+    {
+      "query": "Write a migration and rollback plan for an existing database.",
+      "expected": {
+        "task": {
+          "objective": "Write a migration and rollback plan for an existing database.",
+          "actions": [],
+          "deliverables": [],
+          "domain": null,
+          "explicitSkills": [],
+          "constraints": [],
+          "complexity": "complex",
+          "taskType": "development",
+          "complexityEvidence": [
+            "migration-or-system-impact",
+            "existing-system-integration"
+          ],
+          "development": true,
+          "complexDevelopment": true,
+          "selfContainedFunction": false,
+          "readOnly": false,
+          "activeText": "Write a migration and rollback plan for an existing database.",
+          "activeClauses": [
+            "Write a migration and rollback plan for an existing database."
+          ],
+          "excludedContext": {
+            "futureClauses": 0,
+            "negativeClauses": 0
+          }
+        },
+        "consultCandidates": [],
+        "capabilityCandidates": [],
+        "performance": {
+          "mode": "full",
+          "scannedSkills": true,
+          "scannedCapabilities": true
+        },
+        "budget": {
+          "consultCardLimit": 12,
+          "fullReadLimit": 3,
+          "softTokenLimit": 12000,
+          "explicitSkillException": false,
+          "guidance": "Read complete manuals only after scope and availability checks. Explicitly requested or necessary primary skills may exceed ordinary limits; do not trim safety constraints."
+        }
+      }
+    },
+    {
+      "query": "请润色这句：“Use a browser.”",
+      "expected": {
+        "task": {
+          "objective": "请润色这句：",
+          "actions": [],
+          "deliverables": [],
+          "domain": null,
+          "explicitSkills": [],
+          "constraints": [],
+          "complexity": "simple",
+          "taskType": "general",
+          "complexityEvidence": [],
+          "development": false,
+          "complexDevelopment": false,
+          "selfContainedFunction": false,
+          "readOnly": false,
+          "activeText": "请润色这句：",
+          "activeClauses": [
+            "请润色这句："
+          ],
+          "excludedContext": {
+            "futureClauses": 0,
+            "negativeClauses": 0
+          }
+        },
+        "consultCandidates": [],
+        "capabilityCandidates": [],
+        "performance": {
+          "mode": "full",
+          "scannedSkills": true,
+          "scannedCapabilities": true
+        },
+        "budget": {
+          "consultCardLimit": 3,
+          "fullReadLimit": 1,
+          "softTokenLimit": 12000,
+          "explicitSkillException": false,
+          "guidance": "Read complete manuals only after scope and availability checks. Explicitly requested or necessary primary skills may exceed ordinary limits; do not trim safety constraints."
+        }
+      }
+    }
+  ]
+}

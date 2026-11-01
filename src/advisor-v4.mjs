@@ -1,3 +1,6 @@
+import {validateHostOptions,requestContext,exactToolConsultations} from './host-context-contract.mjs';
+import {invocationConstraints} from './invocation-constraints.mjs';
+import {adviseTaskMethods,methodDirectives} from './task-methods-v4.mjs';
 import {randomUUID} from 'node:crypto';
 import {discoverSkills} from './discovery-v4.mjs';
 import {readFeedbackV4} from './feedback-v4.mjs';
@@ -273,15 +276,16 @@ export function compactAdviceV4(result) {
   }), detailAccess: 'Use responseDetail:full for full catalog metadata; get_skill returns the complete manual. Compact summaries are not execution instructions.'};
 }
 
-function budgetFor(assessment, candidates) {
+function budgetFor(assessment, candidates, profile) {
   const simple = assessment.complexity === 'simple';
   const cardLimit = simple ? 3 : 12;
-  const ordinaryReadLimit = simple ? 1 : 3;
+  const ordinaryReadLimit = profile === 'economy' ? 1 : profile === 'quality' ? (simple ? 2 : 5) : simple ? 1 : 3;
   const explicitCount = candidates.filter((item) => item.explicit).length;
   return {
     consultCardLimit: cardLimit,
     fullReadLimit: ordinaryReadLimit,
-    softTokenLimit: 12_000,
+    softTokenLimit: profile === 'economy' ? 6000 : profile === 'quality' ? 18000 : 12000,
+    ...(profile ? {qualityProfile:profile,verificationDepth:profile==='quality'?'independent-evidence-where-needed':profile==='economy'?'focused-required-checks':'proportionate-checks',requiredValidationPreserved:true} : {}),
     explicitSkillException: explicitCount > ordinaryReadLimit,
     guidance: 'Read complete manuals only after scope and availability checks. Explicitly requested or necessary primary skills may exceed ordinary limits; do not trim safety constraints.',
   };
@@ -329,6 +333,7 @@ function compactCoverage(coverage = {}) {
 }
 
 function advise(query, options = {}, filters = {}) {
+  validateHostOptions(options);
   const routeId = options.routeId || randomUUID();
   const host = options.host || 'codex';
   const assessment = taskAssessment(query, options.taskContext || {});
@@ -348,7 +353,7 @@ function advise(query, options = {}, filters = {}) {
   const skills = list(index.skills);
   const contentHashes = Object.fromEntries(skills.filter((skill) => skill.contentHash).map((skill) => [skill.id, skill.contentHash]));
   const feedback = options.useFeedback === true
-    ? readFeedbackV4({host, taskType: assessment.taskType, contentHashes}, options.feedbackPolicy || {}, options.feedbackPath)
+    ? readFeedbackV4({host, taskType: assessment.taskType, contentHashes,modelId:options.currentModel}, options.feedbackPolicy || {}, options.feedbackPath)
     : new Map();
   // New ranking remains opt-in until representative recall/precision gates pass.
   const retrieval = retrievalIndex(skills, assessment.activeText, options.retrievalProfile === 'experimental');
@@ -364,7 +369,7 @@ function advise(query, options = {}, filters = {}) {
     const floor = Math.max(8, ranked[0].score * 0.82);
     ranked = ranked.filter((item) => item.score >= floor || item.explicit || item.reasons.some((reason) => reason.startsWith('matched task signal:')));
   }
-  const budget = budgetFor(assessment, ranked);
+  const budget = budgetFor(assessment, ranked, options.qualityProfile);
   const limit = Number.isInteger(filters.limit) && filters.limit > 0 ? Math.min(filters.limit, 12) : budget.consultCardLimit;
   const explicitCandidates = ranked.filter(item => item.explicit);
   const selectedCards = [...explicitCandidates, ...ranked.filter(item => !item.explicit).slice(0, Math.max(0, limit - explicitCandidates.length))];
@@ -404,18 +409,31 @@ function advise(query, options = {}, filters = {}) {
   };
 }
 
-export function routeTaskV4(query, options = {}) { const result = advise(query, options); return options.responseDetail === 'compact' ? compactAdviceV4(result) : result; }
+function extendAdvice(result,query,options){
+  const fast=result.performance?.mode==='fast';
+  const unquoted=String(query).replace(/```[\s\S]*?```/g,' ').replace(/[“"「『][^”"」』\n]*[”"」』]/g,' ');
+  const assessment={...result.task,methodDirectives:methodDirectives(unquoted.split(/[。！？!?;；，,\n]+/))};
+  return {...result,requestContext:requestContext(query,options),taskConstraints:invocationConstraints({...result.task,rawText:query},options),methodCandidates:fast?[]:adviseTaskMethods(assessment,options),capabilityConsultations:fast?[]:exactToolConsultations(query,result.task,options)};
+}
+export function routeTaskV4(query, options = {}) { const result = extendAdvice(advise(query, options),query,options); return options.responseDetail === 'compact' ? compactAdviceV4(result) : result; }
 export function searchSkills(query, options = {}) {
-  const result = advise(query, options, {source: options.source, domain: options.domain, phase: options.phase, limit: options.limit,followup:true});
+  const result = extendAdvice(advise(query, options, {source: options.source, domain: options.domain, phase: options.phase, limit: options.limit,followup:true}),query,options);
   return options.responseDetail === 'compact' ? compactAdviceV4(result) : result;
 }
 export function formatAgentContextV4(result) {
   const candidates = list(result?.consultCandidates).map((item) => `${item.id} (${item.phase}; ${item.suggestedMode}): ${item.reasons.join('; ') || item.summaryZh}`).join('\n');
   const tools = list(result?.capabilityCandidates).map(item=>`${item.name} (${item.kind}; ${item.decision}; ${item.phase}): ${item.reason}; ${item.when}`).join('\n');
+  const methods=list(result?.methodCandidates).map(item=>`${item.id} (${item.name}; advisory only): ${String(item.reason||'').slice(0,180)}`).join('\n');
+  const consultations=list(result?.capabilityConsultations).map(item=>`${item.name} (${item.decision}; effect=${item.effect||'unknown'}; available=${item.availability?.callable??'unknown'}): consultation only; verify schema, inputs and authorization.`).join('\n');
+  const limits=result?.taskConstraints;
+  const restricted=limits&&(limits.readOnly||limits.networkForbidden||Array.isArray(limits.allowedActions));
   return `[动态技能路由器] routeId=${result?.routeId || 'unknown'} contractVersion=4\n` +
     `Native baseline: ${result?.decisionBrief?.nativeBaseline?.approach || result?.decisionBrief?.nativeBaseline?.prompt || 'Evaluate native capabilities.'}\n` +
     `Candidate manuals (advisory only):\n${candidates || 'none'}\n` +
     `Plugin/MCP/tool candidates (host executes within task scope):\n${tools || 'none; use native capabilities'}\n` +
+    (methods?`Optional method advice (skip when unnecessary; no mandatory interview or workflow):\n${methods}\n`:'') +
+    (consultations?`Host-proposed tool consultations (not user authorization):\n${consultations}\n`:'') +
+    (restricted?`Current restrictions: readOnly=${Boolean(limits.readOnly)}; networkForbidden=${Boolean(limits.networkForbidden)}${Array.isArray(limits.allowedActions)?`; allowedActions=[${limits.allowedActions.join(', ')}]`:''}. Restrictions only; unknown effects remain gated.\n`:'') +
     (result?.recoveryPlan?.triggered ? `Recovery: ${result.recoveryPlan.reason}; external research required=${result.recoveryPlan.externalResearchRequired}. Diagnose, research, acquire only useful capabilities, then return to the original acceptance criteria.\n` : '') +
     `Choose skip, consult, adapt, or execute after scope and availability checks. Read complete manuals before applying them. ` +
     `No execution or external write is authorized by this advice.\n` +

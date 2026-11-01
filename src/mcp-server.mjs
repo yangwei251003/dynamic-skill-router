@@ -29,6 +29,7 @@ const taskContextSchema = z.object({
   objective: z.string().optional(), actions: z.array(z.string()).optional(), deliverables: z.array(z.string()).optional(),
   domain: z.string().optional(), background: z.string().optional(), explicitSkills: z.array(z.string()).optional(),
   constraints: z.array(z.string()).optional(), nativeApproach: z.string().optional(),
+  capabilityRequests:z.array(z.object({toolNames:z.array(z.string().refine(v=>v.trim().length>0)).min(1),evidenceRefs:z.array(z.string().refine(v=>v.trim().length>0)).min(1),reason:z.string().optional()})).max(10).optional(),
   complexity: z.enum(['low', 'medium', 'high']).optional(), complexityEvidence: z.array(z.string()).optional(),
 });
 const runtimeSkillSchema = z.object({path: z.string(), id: z.string().optional(), provider: z.string().optional(), enabled: z.boolean().optional(), host: hostSchema.optional()});
@@ -37,10 +38,11 @@ const runtimeToolSchema = z.object({name:z.string().min(1),description:z.string(
 const capabilityFields = {
   runtimeTools:z.array(runtimeToolSchema).max(3000).optional().describe('当前会话工具清单；提供真实名称、用途和可证实的插件来源。不能用配置推断可调用。'),
   runtimePlugins:z.array(z.object({id:z.string().min(1),name:z.string().optional(),description:z.string().max(4000).optional(),enabled:z.boolean().optional(),skills:z.array(z.string()).optional()})).max(500).optional(),
-  invocationContext:z.object({phase:z.enum(['auto','discovery','planning','design','implementation','validation','delivery']).optional()}).optional(),
+  invocationContext:z.object({mode:z.enum(['plan','read','execute']).optional(),readOnly:z.boolean().optional(),networkForbidden:z.boolean().optional(),allowedActions:z.array(z.string()).optional(),phase:z.enum(['auto','discovery','planning','design','implementation','validation','delivery']).optional()}).optional(),
   capabilityLimit:z.number().int().min(1).max(10).optional(),
 };
 const recoveryFields={
+  taskMethods:z.union([z.literal(false),z.object({maxCards:z.number().int().min(0).max(2).optional(),disabledIds:z.array(z.string()).optional()})]).optional(),
   recoveryContext:z.object({confidence:z.enum(['high','medium','low']).optional(),blocked:z.boolean().optional(),userRejected:z.boolean().optional(),failedAttempts:z.number().int().min(0).optional(),capabilityNeed:z.string().max(500).optional(),networkAllowed:z.boolean().optional()}).optional().describe('当前失败/信心事实；用户否定效果或低信心会要求主动外部查证。不是扩大权限。'),
 };
 const adaptiveFields={...recoveryFields,routingMode:z.enum(['auto','fast','full']).optional(),nativeSufficient:z.boolean().optional().describe('主模型已判断原生能力可可靠完成；遇阻/低信心/用户否定时不得靠此跳过查证。')};
@@ -87,7 +89,7 @@ function createServer() {
     description: '沿用已有 routeId，在阶段变化或出现能力缺口时只读检索手册。候选是参考材料，由主模型判断是否完整查阅和采用。',
     inputSchema: z.object({query: z.string().min(1), routeId: z.string().min(1), ...discoveryFields, ...capabilityFields,...recoveryFields,
       source: z.string().optional(), domain: z.string().optional(), phase: z.string().optional(),
-      limit: z.number().int().min(1).max(30).optional(), taskContext: taskContextSchema.optional(), runtimeCapabilities: runtimeCapabilitiesSchema.optional(),
+      qualityProfile:z.enum(['economy','balanced','quality']).optional(),currentModel:z.string().optional(),limit: z.number().int().min(1).max(30).optional(), taskContext: taskContextSchema.optional(), runtimeCapabilities: runtimeCapabilitiesSchema.optional(),
       responseDetail: z.enum(['compact', 'full']).optional().default('compact'), useFeedback: z.boolean().optional().default(true),
     }),
   }, async ({query, ...options}) => asResult(searchSkills(query, options)));
@@ -107,13 +109,13 @@ function createServer() {
     description:'复用 routeId，在阶段变化或能力缺口时挑选确实有帮助的插件/MCP/工具，返回调用时机、收益、范围检查及精确工具名。主 Agent 核对真实输入和既有授权后调用；路由器不代执行业务动作。',
     annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},
     inputSchema:z.object({query:z.string().min(1),routeId:z.string().min(1),...discoveryFields,...capabilityFields,...recoveryFields,runtimeCapabilities:runtimeCapabilitiesSchema.optional(),taskContext:taskContextSchema.optional(),phase:z.enum(['discovery','planning','design','implementation','validation','delivery']).optional()}),
-  }, async ({query,routeId,...options})=>{const task=taskAssessment(query,options.taskContext);return asResult({routeId,...adviseCapabilities(task,options),recoveryPlan:planRecovery({...task,rawText:query},options)});});
+  }, async ({query,routeId,...options})=>{const task={...taskAssessment(query,options.taskContext),rawText:query};return asResult({routeId,...adviseCapabilities(task,options),recoveryPlan:planRecovery({...task,rawText:query},options)});});
 
   server.registerTool('plan_recovery',{
     title:'遇阻后检索资源与补足能力',
     description:'复用 routeId，低成本判断遇阻、低信心、用户否定效果后的行动顺序。返回必须查证的条件、公开检索词、真实可用搜索入口、工具安装条件和回到原任务的验收步骤。不联网、不安装、不执行外部动作；由主 Agent 主动落实。',
     annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},
-    inputSchema:z.object({query:z.string().min(1),routeId:z.string().min(1),...recoveryFields,runtimeTools:z.array(runtimeToolSchema).max(3000).optional(),runtimeCapabilities:runtimeCapabilitiesSchema.optional(),taskContext:taskContextSchema.optional()}),
+    inputSchema:z.object({query:z.string().min(1),routeId:z.string().min(1),...recoveryFields,...capabilityFields,runtimeTools:z.array(runtimeToolSchema).max(3000).optional(),runtimeCapabilities:runtimeCapabilitiesSchema.optional(),taskContext:taskContextSchema.optional()}),
   },async ({query,routeId,...options})=>asResult({routeId,...planRecovery({...taskAssessment(query,options.taskContext),rawText:query},options)}));
 
   server.registerTool('plan_agents', {
@@ -207,7 +209,7 @@ function createServer() {
     description: '记录本次技能选择是否合适，供以后调优；不会自动改写路由规则。',
     inputSchema: z.object({
       contractVersion: z.union([z.literal(3), z.literal(4)]).optional().default(3),
-      taskType: z.string().min(1).optional(),
+      taskType: z.string().min(1).optional(),modelId:z.string().min(1).optional(),observedAt:z.string().optional(),revoked:z.boolean().optional(),
       decisions: z.array(z.object({skillId: z.string().min(1), contentHash: z.string().min(1), mode: z.enum(['skip','consult','adapt','execute']), shown: z.boolean(), read: z.boolean(), adopted: z.boolean(), outcome: z.enum(['helpful','wrong','unnecessary','unknown']), evidence: z.array(z.object({kind: z.enum(['validation','user','self']), reference: z.string().min(1), passed: z.boolean().optional()}))})).optional(),
       routeId: z.string().optional(),
       registryRevision: z.string().optional(),
@@ -237,7 +239,7 @@ function createServer() {
       if (!checked.ok) return asResult({recorded: false, errors: checked.errors});
       fs.mkdirSync(LOG_ROOT, {recursive: true});
       fs.appendFileSync(path.join(LOG_ROOT, 'feedback-v4.jsonl'), `${JSON.stringify({...checked.entry, timestamp: new Date().toISOString()})}\n`, 'utf8');
-      return asResult({recorded: true, taskIdentityPresent: Boolean(feedback.routeId?.trim()), policy: '有 routeId 才参与校准；同一任务、技能版本、采用方式仅计一个样本，冲突报告不计分。仅对已采用且有验证或用户证据的同宿主、任务类型、内容版本和采用方式进行有界校准；不是模型训练。'});
+      return asResult({recorded: true, taskIdentityPresent: Boolean(feedback.routeId?.trim()), policy: '需要 routeId、可靠 modelId、当前内容hash与90天内 observedAt/timestamp 才参与校准；过期、未来、撤销或冲突记录不计分。仅对已采用且有验证或用户证据的同宿主、任务类型、内容版本和采用方式进行有界校准；不是模型训练。'});
     }
     if (typeof feedback.query !== 'string' || !feedback.selectedIds || !feedback.outcome) return asResult({recorded: false, errors: ['V3 requires query, selectedIds and outcome']});
     fs.mkdirSync(LOG_ROOT, {recursive: true});

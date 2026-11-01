@@ -80,34 +80,46 @@ const decision = (outcome, evidence = [{kind: 'validation', reference: 'focused 
   skillId: 'skill-stocktake', contentHash: 'hash-stock', mode: 'adapt', shown: true, read: true, adopted: true, outcome, evidence,
 });
 let taskSequence = 0;
-const entry = (outcome, evidence) => ({routeId: `test-task-${++taskSequence}`, contractVersion: 4, taskType: 'complex', host: 'codex', decisions: [decision(outcome, evidence)]});
+const feedbackPolicy = {nowMs: Date.parse('2026-11-01T00:00:00Z')};
+const feedbackContext = {host:'codex',taskType:'complex',modelId:'fixture-model',contentHashes:{'skill-stocktake':'hash-stock'}};
+const calibrate = (entries, context = {}) => computeFeedbackCalibrationV4(entries, {...feedbackContext,...context}, feedbackPolicy);
+const entry = (outcome, evidence) => ({routeId: `test-task-${++taskSequence}`, contractVersion: 4, taskType: 'complex', host: 'codex', modelId:'fixture-model', observedAt:'2026-10-31T00:00:00Z', decisions: [decision(outcome, evidence)]});
 assert.equal(validateOutcomeV4(entry('helpful')).ok, true);
 assert.equal(validateOutcomeV4({contractVersion: 4, decisions: []}).ok, false);
-const positive = computeFeedbackCalibrationV4(Array.from({length: 12}, () => entry('helpful')), {host: 'codex', taskType: 'complex', mode: 'adapt', contentHashes: {'skill-stocktake': 'hash-stock'}});
+const positive = calibrate(Array.from({length: 12}, () => entry('helpful')), {mode:'adapt'});
 assert(positive.get('skill-stocktake').adjustment > 0);
-const negativeFeedback = computeFeedbackCalibrationV4(Array.from({length: 5}, () => entry('wrong')), {mode: 'adapt'});
+const negativeFeedback = calibrate(Array.from({length: 5}, () => entry('wrong')), {mode: 'adapt'});
 assert.equal(negativeFeedback.get('skill-stocktake').adjustment, -3);
-const mixedModes = computeFeedbackCalibrationV4([...Array.from({length: 12}, () => entry('helpful')), ...Array.from({length: 5}, () => ({...entry('wrong'), decisions: [{...decision('wrong'), mode: 'execute'}]}))]);
+const mixedModes = calibrate([...Array.from({length: 12}, () => entry('helpful')), ...Array.from({length: 5}, () => ({...entry('wrong'), decisions: [{...decision('wrong'), mode: 'execute'}]}))]);
 assert.equal(mixedModes.get('skill-stocktake').adjustment, 0);
 assert(mixedModes.get('skill-stocktake').byMode.adapt.adjustment > 0);
 assert.equal(mixedModes.get('skill-stocktake').byMode.execute.adjustment, -3);
 const changedHash = {...entry('wrong'), decisions: [{...decision('wrong'), contentHash: 'different-hash'}]};
-const mixedHashes = computeFeedbackCalibrationV4([...Array.from({length: 12}, () => entry('helpful')), ...Array.from({length: 5}, (_, i) => ({...changedHash, routeId: `changed-${i}`}))], {mode: 'adapt'});
-assert.equal(mixedHashes.get('skill-stocktake').adjustment, 0);
-assert.equal(mixedHashes.get('skill-stocktake').ambiguousContentHashes, true);
-assert.equal(computeFeedbackCalibrationV4([entry('helpful', [{kind: 'self', reference: 'felt good'}])]).size, 0);
-assert.equal(computeFeedbackCalibrationV4([entry('helpful', [{kind: 'validation', reference: 'failed', passed: false}])]).size, 0);
-assert.equal(computeFeedbackCalibrationV4([entry('helpful', [{kind: 'validation', reference: 'unverified'}])]).size, 0);
-assert.equal(computeFeedbackCalibrationV4([{selectedIds: ['skill-stocktake'], outcome: 'helpful'}]).size, 0);
-assert.equal(computeFeedbackCalibrationV4([entry('helpful')], {contentHashes: {'skill-stocktake': 'new-hash'}}).size, 0);
+const hashEntries = [...Array.from({length: 12}, () => entry('helpful')), ...Array.from({length: 5}, (_, i) => ({...changedHash, routeId: `changed-${i}`}))];
+// 4.2.1 intentionally requires the current hash: an unbound mixed-hash
+// history is audit-only, rather than a calibrated ambiguous-hash result.
+assert.equal(calibrate(hashEntries,{mode:'adapt',contentHashes:undefined}).size,0);
+const mixedHashes = calibrate(hashEntries,{mode:'adapt'}).get('skill-stocktake');
+assert.equal(mixedHashes.contentHash,'hash-stock');assert.equal(mixedHashes.samples,12);assert(mixedHashes.adjustment>0);
+const changedCurrent = calibrate(hashEntries,{mode:'adapt',contentHashes:{'skill-stocktake':'different-hash'}}).get('skill-stocktake');
+assert.equal(changedCurrent.samples,5);assert.equal(changedCurrent.adjustment,-3);
+assert.equal(calibrate([entry('helpful', [{kind: 'self', reference: 'felt good'}])]).size, 0);
+assert.equal(calibrate([entry('helpful', [{kind: 'validation', reference: 'failed', passed: false}])]).size, 0);
+assert.equal(calibrate([entry('helpful', [{kind: 'validation', reference: 'unverified'}])]).size, 0);
+assert.equal(calibrate([{selectedIds: ['skill-stocktake'], outcome: 'helpful'}]).size, 0);
+assert.equal(calibrate([entry('helpful')], {contentHashes: {'skill-stocktake': 'new-hash'}}).size, 0);
+assert.equal(calibrate([{...entry('helpful'),observedAt:undefined}]).size,0);
+assert.equal(calibrate([{...entry('helpful'),modelId:undefined}]).size,0);
+assert.equal(calibrate([entry('helpful')],{modelId:undefined}).size,0);
+assert.equal(calibrate([entry('helpful')],{contentHashes:undefined}).size,0);
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'advisor-v4-'));
 try {
   const feedbackPath = path.join(dir, 'feedback.jsonl');
   fs.writeFileSync(feedbackPath, `${JSON.stringify(entry('helpful'))}\n`);
   const before = fs.readFileSync(feedbackPath, 'utf8');
-  assert.equal(readFeedbackV4({mode: 'adapt'}, {}, feedbackPath).get('skill-stocktake').samples, 1);
-  routeTaskV4('升级技能路由器', {index, feedbackPath, useFeedback: true});
+  assert.equal(readFeedbackV4({...feedbackContext,mode:'adapt'}, feedbackPolicy, feedbackPath).get('skill-stocktake').samples, 1);
+  routeTaskV4('升级技能路由器', {index, feedbackPath, useFeedback: true,currentModel:'fixture-model',feedbackPolicy});
   assert.equal(fs.readFileSync(feedbackPath, 'utf8'), before);
 } finally { fs.rmSync(dir, {recursive: true, force: true}); }
 

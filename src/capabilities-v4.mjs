@@ -1,3 +1,5 @@
+import {validateHostOptions,exactToolConsultations} from './host-context-contract.mjs';
+import {invocationConstraints,constrainCapability} from './invocation-constraints.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -32,7 +34,7 @@ function serverCard(name, value, plugin = null) {
 
 /** Read-only inventory. Never starts MCP processes, connects to endpoints, or writes a cache. */
 export function discoverCapabilities(options = {}) {
-  const home = options.homeDir || os.homedir();
+  const home = options.homeDir || process.env.SKILL_ROUTER_HOME || os.homedir();
   const entries = new Map(), errors = [];
   const codex = (options.host || 'codex') === 'codex';
   let config = {};
@@ -176,7 +178,7 @@ function requestedDelivery(assessment, entry) {
 }
 
 /** Produces host execution choices, never calls business tools itself. */
-export function adviseCapabilities(assessment, options = {}) {
+function adviseCapabilitiesBase(assessment, options = {}) {
   const inventory = options.capabilityIndex || discoverCapabilities(options);
   const active = assessment.activeText || '';
   const phase = currentPhase(active, options.phase || options.invocationContext?.phase);
@@ -248,4 +250,13 @@ export function adviseCapabilities(assessment, options = {}) {
       recheckAt:['initial-task','phase-change','capability-gap','tool-unavailable'],
       skipWhen:['native-tools-sufficient','no-specific-task-benefit','already-have-required-evidence'],
       rule:'Use helpful, currently callable tools within existing authorization. Discovery is not permission; do not ask again for already authorized routine work.'}};
+}
+
+export function adviseCapabilities(assessment,options={}) {
+  validateHostOptions(options);
+  const base=adviseCapabilitiesBase(assessment,options);
+  const result=options.taskContext?.capabilityRequests?{...base,capabilityConsultations:exactToolConsultations(assessment.rawText??assessment.activeText,assessment,options)}:base;
+  if(!options.invocationContext&&options.recoveryContext?.networkAllowed!==false)return result;
+  const constraints=invocationConstraints(assessment,options);
+  return {...result,taskConstraints:constraints,candidates:result.candidates.map(card=>constrainCapability(card,constraints,(options.runtimeTools||[]).find(t=>t.name===card.name)||{}))};
 }
