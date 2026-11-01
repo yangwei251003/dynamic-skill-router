@@ -201,6 +201,75 @@ const ARTIFACT_TYPES=[
 function semanticNeeds(assessment) {
   const clauses=splitIntentClauses(assessment);
   const needs=[];
+  // A TeX task is identified by an actionable compile/create verb and a
+  // document/project target in the same original instruction clause. The
+  // result is only a reason to inspect a tool: it does not establish a local
+  // project, its main file, or authorization to alter existing files.
+  // The common task parser may trim a trailing "later" after preserving the
+  // words before it. Consult the masked original to keep that future action
+  // from becoming a present recommendation. This only removes a candidate;
+  // it never derives authorization from quoted or supplied material.
+  const rawLatexFragments=typeof assessment.rawText==='string'
+    ? requestSegments(assessment.rawText,{preserveNames:false}).text.split(/[。！？!?;；，,\n]+|(?<!\d)\.(?=\s+\S)/u)
+      .flatMap(raw=>raw.split(/(?:但是|并且|然后|同时|以及|但|并|\band then\b|\band\b|\bbut\b)/i))
+    :[];
+  const latexClauses=list(assessment.activeClauses).flatMap(raw=>{
+    const parts=String(raw).split(/(?:但是|并且|然后|同时|以及|但|并|\band then\b|\band\b|\bbut\b)/i);
+    return parts.map((part,index)=>({part,previous:index>0?parts[index-1]:''}));
+  });
+  for(const {part,previous} of latexClauses) {
+    const current=part.trim();
+    const originals=rawLatexFragments.filter(raw=>raw.trim().toLowerCase().startsWith(current.toLowerCase())&&current.length>0);
+    if(originals.length&&originals.every(raw=>/^\s*(?:later(?:\s+on)?|in\s+the\s+future|eventually|以后|下次|将来|日后|稍后)\s*[.!?。！？]*\s*$/iu.test(raw.trim().slice(current.length))))continue;
+    if(/^(?:(?:请|帮我|请你|麻烦|please)\s*)*(?:解释|介绍|讲解|说明|讨论|比较|如何|怎么|是否|下次|以后|将来|未来|日后|explain\b|describe\b|how\b|whether\b|later\b|in future\b)/i.test(current))continue;
+    // "compile ... next week" is a deferred operation; "compile ... by next
+    // week" is a current request with a deadline and must remain actionable.
+    if(/\b(?:compile|build)\b.{0,80}\b(?:next\s+(?:week|month|year)|tomorrow)\b/i.test(current)
+        && !/\b(?:by|before|no\s+later\s+than)\s+(?:next\s+(?:week|month|year)|tomorrow)\b/i.test(current))continue;
+    if(/(?:了解|学习|请教|告诉我|说明|解释|介绍|讨论|研究|比较|如何|怎么|是否).{0,20}(?:编译|构建|compile|build)/i.test(current))continue;
+    // Building a compiler's own source is different from using a compiler to
+    // build a TeX document. Mention of "编译器" alone must not suppress the
+    // latter, but an explicit request to build the engine itself remains out.
+    if(/(?:编译|构建)\s*(?:(?:latex|tex)\s*)?(?:编译器|引擎)(?:本身|源代码|源码|软件)?|\b(?:compile|build)\s+(?:(?:the|a|an)\s+)?(?:latex|tex)\s+(?:compiler|engine|distribution|software)\b/i.test(current))continue;
+    const direct=current
+      .replace(/(?:不要|不得|禁止|不能|请勿|不允许|不可以|不必|无需|无须|不用|不需要|暂不|先不|别|避免|停止|不)\s*(?:(?:再|先|实际|直接|自行|擅自|去|执行|进行|运行)\s*){0,4}(?:编译(?!器)|构建|新建|创建|建立|生成)/gu,' ')
+      .replace(/\b(?:do not|don't|never|without|no need to|avoid|not yet)\s+(?:(?:actually|directly|run|running)\s+){0,3}(?:compile|build|create|make|start|initialize)\b/gi,' ')
+      .replace(/(?:查看|读取|阅读|分析|解释|总结|展示)\s*(?:已有|现有|上次|此前|之前)(?:的)?\s*(?:(?:latex|tex)\s*)?(?:编译|构建)(?:日志|结果|错误|报错|记录)/giu,' ')
+      .replace(/(?:已有|现有|上次|此前|之前|历史|保存的?)\s*(?:的)?\s*(?:(?:latex|tex)\s*)?(?:编译|构建)\s*(?:日志|结果|错误|报错|记录)/giu,' ')
+      .replace(/(?:已有|现有|上次|此前|之前|历史|保存的?)\s*(?:的)?\s*(?:latex|tex)\s*(?:项目|工程|文档|文件|文稿|稿件)\s*(?:的)?\s*(?:编译|构建)\s*(?:日志|结果|错误|报错|记录)/giu,' ')
+      .replace(/\b(?:read|view|inspect|explain|summari[sz]e)\s+(?:(?:the|an?|existing|previous|prior|saved)\s+){0,4}(?:(?:latex|tex)\s+)?(?:compilation|compile|build)\s+(?:logs?|results?|errors?|output)\b/gi,' ')
+      .replace(/\b(?:existing|previous|prior|saved)\s+(?:(?:latex|tex)\s+)?(?:compilation|compile|build)\s+(?:logs?|results?|errors?|output)\b/gi,' ');
+    const explicitTarget=/(?:\b(?:latex|tex)\b|\.tex\b)/i.test(direct);
+    const previousTarget=/(?:\b(?:latex|tex)\b|\.tex\b)/i.test(previous);
+    // Only two narrow anaphora are inherited from the immediately preceding
+    // fragment of the same clause: inspect a named TeX file and request its
+    // compile errors, or compile "the/this project" just explicitly created.
+    const diagnosticOfPrevious=previousTarget
+      &&/(?:检查|查看|检视|inspect|check)/i.test(previous)
+      &&/^(?:请|再|给出|提供|输出|报告|列出|检查|查看|show|report|provide|check|inspect|the|its|and|\s)*(?:的)?\s*(?:编译|compilation|compile)\s*(?:错误|报错|诊断|日志|问题|errors?|diagnostics?|logs?|issues?)/i.test(direct);
+    const compilePrevious=previousTarget
+      &&/(?:新建|创建|建立|初始化|\b(?:create|make|initialize)\b)/i.test(previous)
+      &&/^(?:(?:请|再|然后|接着|please|then)\s*)*(?:编译|compile)\s*(?:(?:该|这个|此|其|刚才的?)\s*(?:项目|工程|文档|文件)|(?:the|this|same)\s+(?:project|document|file)\b)/i.test(direct);
+    if(!explicitTarget&&!diagnosticOfPrevious&&!compilePrevious)continue;
+    if(/(?:编译(?!器)|构建|\b(?:compil(?:e|es|ed|ing)|build(?:s|ing)?)\b)/i.test(direct))needs.push({kind:'latex-compile',clause:current});
+    // Require the project itself to be the creation target. Creating a file,
+    // image folder or report inside an existing LaTeX project is not the same
+    // operation, even though the same three generic words are present.
+    const createProject=/(?:新建|创建|建立|初始化)\s*(?:(?:一个|一份|新的?|本地|空白|的)\s*){0,5}(?:latex|tex)\s*(?:的\s*)?(?:项目|工程)(?!中|内|里|下|的)/i.test(direct)
+      ||/(?:latex|tex)\s*(?:项目|工程)\s*(?:请|需|需要|可以|可)?\s*(?:新建|创建|建立|初始化)/i.test(direct)
+      ||/(?:latex|tex)\s*(?:来|以|去|用于)?\s*(?:新建|创建|建立|初始化)\s*(?:(?:一个|一份|新的?|本地|空白|的|论文|文档)\s*){0,5}(?:项目|工程)(?!中|内|里|下|的)/i.test(direct)
+      ||/\b(?:create|make|start|initialize)\s+(?:(?:a|an|new|local|empty)\s+){0,5}(?:latex|tex)\s+(?:projects?|workspace)\b(?!\s+(?:folder|subdirectory|files?|assets?)\b)/i.test(direct)
+      ||/\b(?:latex|tex)\s+(?:to\s+)?(?:create|make|initialize)\s+(?:(?:a|an|new|local|empty)\s+){0,5}(?:projects?|workspace)\b/i.test(direct);
+    if(createProject)needs.push({kind:'latex-create-project',clause:current});
+    // This host's project-creation tool also supports a new standalone TeX
+    // document, but it creates a dedicated project directory; the host must
+    // honor the requested file path and must not use it to insert a file into
+    // an existing project implicitly.
+    const existingProject=/(?:已有|现有|既有|原有|已存在|existing|current).{0,24}(?:latex|tex).{0,16}(?:项目|工程|projects?|workspace)|(?:latex|tex).{0,16}(?:已有|现有|既有|原有|已存在|existing|current).{0,16}(?:项目|工程|projects?|workspace)/i.test(direct);
+    const createDocument=/(?:新建|创建|建立|初始化)\s*(?:(?:一个|一份|一篇|新的?|本地|空白|的)\s*){0,5}(?:latex|tex)\s*(?:的\s*)?(?:文档|文稿|稿件|文件(?!夹))(?!中|内|里|下|的)/i.test(direct)
+      ||/\b(?:create|make|start|initialize)\s+(?:(?:a|an|new|fresh|local|empty)\s+){0,5}(?:latex|tex)\s+(?:files?|documents?|reports?)\b(?!\s+(?:folder|subdirectory|assets?)\b)/i.test(direct);
+    if(createDocument&&!existingProject)needs.push({kind:'latex-create-document',clause:current});
+  }
   for(const clause of clauses) {
     const info=/^(?:(?:请|帮我|请你|麻烦|please)\s*)*(?:解释|介绍|讲解|说明|比较|举例|(?:给(?:我|出)?|提供|列举).{0,20}(?:例子|示例|实例|样例)|什么是|如何|怎么|explain\b|describe\b|(?:give|show)\b.{0,25}\bexamples?\b|what is\b|how (?:to|does|do)\b)/i.test(clause);
     const future=/^(?:(?:请|帮我|please)\s*)*(?:以后|将来|未来|下次|日后|后续|下一步|later\b|eventually\b|in future\b)/i.test(clause);
@@ -314,6 +383,21 @@ function imageAction(purpose,verb,nounAction) {
   // Bind the operation to its object, not two words in unrelated sentences.
   return new RegExp(`\\b${verb}\\b\\s+${IMAGE_QUALIFIERS}${IMAGE_OBJECT}\\b|\\b${IMAGE_OBJECT}\\s+${nounAction}\\b`,'i').test(purpose);
 }
+function latexToolPurposes(purpose) {
+  // Later descriptions may mention another tool as a prerequisite/example;
+  // only the lead sentence establishes this tool's own TeX purpose.
+  const first=String(purpose||'').split(/(?<=[.!?。！？])\s+/u)[0];
+  const target=/(?:\b(?:latex|tex)\b|\.tex\b)/i.test(first);
+  const document=/(?:文档|文件|项目|工程|\b(?:documents?|files?|projects?|workspace)\b)/i.test(first);
+  const create=target&&document&&/^(?:(?:this\s+(?:tool|function)\s+(?:can\s+|will\s+)?|use\s+(?:this\s+)?tool\s+to\s+)|(?:(?:此|该)工具)?(?:用于|可以|可)?)\s*(?:创建|新建|建立|(?:create|creates|creating|initialize)\b)/i.test(first)&&/(?:项目|工程|\b(?:projects?|workspace)\b)/i.test(first);
+  return {
+    compile:target&&document&&/^(?:(?:this\s+(?:tool|function)\s+(?:can\s+|will\s+)?|use\s+(?:this\s+)?tool\s+to\s+)|(?:(?:此|该)工具)?(?:用于|可以|可)?)\s*(?:编译|compil(?:e|es|ed|ing)\b)/i.test(first),
+    create,
+    // A project creator is recommended for a new document only when its own
+    // description explicitly advertises this use, as the host tool does.
+    createDocument:create&&/\bnew\s+(?:latex|tex)\s+(?:files?|documents?)\b/i.test(purpose),
+  };
+}
 function semanticMatches(entry,needs) {
   if(!['tool','plugin','mcp'].includes(entry.kind))return [];
   // For generic multi-operation web tools inspect named operation examples too.
@@ -333,6 +417,7 @@ function semanticMatches(entry,needs) {
     &&/(?:创建|设置|管理|更新|\b(?:create|update|manage|schedule)\b)/i.test(purpose);
   const reminderUpdate=/(?:更新|修改|调整|管理|\b(?:update|edit|change|manage)\b)/i.test(purpose);
   const reminderDelete=/(?:删除|取消|移除|管理|\b(?:delete|remove|cancel|manage)\b)/i.test(purpose);
+  const latex=latexToolPurposes(purpose);
   const artifactAction=/(?:修改|编辑|修复|添加|插入|更新|开发|搭建|实现|优化|维护|排版|\b(?:updat(?:e|es|ed|ing)|edit(?:s|ed|ing)?|fix(?:es|ed|ing)?|repair(?:s|ed|ing)?|modif(?:y|ies|ied|ying)|add(?:s|ed|ing)?|insert(?:s|ed|ing)?|build(?:s|ing)?|develop(?:s|ed|ing)?)\b)/i.exec(purpose);
   return needs.filter(need=>
     (need.kind==='image-create'&&make)||
@@ -343,6 +428,9 @@ function semanticMatches(entry,needs) {
     (need.kind==='academic-read'&&academicRead)||
     (need.kind==='scheduled-reminder'&&reminder)||
     (need.kind==='reminder-manage'&&reminder&&(need.action==='delete'?reminderDelete:reminderUpdate))||
+    (need.kind==='latex-compile'&&latex.compile)||
+    (need.kind==='latex-create-project'&&latex.create)||
+    (need.kind==='latex-create-document'&&latex.createDocument)||
     (need.kind.startsWith('artifact-edit:')&&artifactAction&&ARTIFACT_TYPES.some(item=>{
       if(item.kind!==need.kind)return false;
       const target=item.purpose.exec(purpose);if(!target||target.index<artifactAction.index)return false;
@@ -408,7 +496,8 @@ function adviseCapabilitiesBase(assessment, options = {}) {
   const rawQuery=assessment.rawText??active;
   const imageBans=imageToolProhibitions(rawQuery),searchToolBanned=webSearchToolProhibited(rawQuery),imageInquiryOnly=imageEditInquiryOnly(rawQuery);
   const givenPhase=options.phase||options.invocationContext?.phase;
-  const phase = (!givenPhase||givenPhase==='auto')&&needs.some(n=>n.kind==='image-create'||n.kind==='image-edit'||n.kind==='scheduled-reminder'||n.kind==='reminder-manage'||n.kind.startsWith('artifact-edit:'))?'implementation':currentPhase(active,givenPhase);
+  const phase = (!givenPhase||givenPhase==='auto')&&needs.some(n=>n.kind==='image-create'||n.kind==='image-edit'||n.kind==='scheduled-reminder'||n.kind==='reminder-manage'||n.kind==='latex-create-project'||n.kind==='latex-create-document'||n.kind.startsWith('artifact-edit:'))?'implementation'
+    :(!givenPhase||givenPhase==='auto')&&needs.some(n=>n.kind==='latex-compile')?'validation':currentPhase(active,givenPhase);
   const pureImageTask=needs.length>0&&needs.every(n=>n.kind.startsWith('image-'));
   // Exact runtime handles are explicit identities, not evidence that every
   // other tool sharing their host namespace is relevant to the task.
@@ -457,6 +546,7 @@ function adviseCapabilitiesBase(assessment, options = {}) {
     if(entry.kind==='tool'&&namedProviders.size&&!namedProviders.has(providerKey(entry.plugin))&&!namedProviders.has(providerKey(entry.server))&&![...namedProviders].some(p=>(`-${label(entry.name)}-`).includes(`-${p}-`))&&!independentNeed)continue;
     // Purpose text carries more signal than cross-tool instructions and examples.
     const purpose=purposeText(entry.description);
+    const latexPurpose=latexToolPurposes(purpose);
     if(/^Capture\b/i.test(purpose)&&!/捕获|截图|导入|capture|screenshot|import/i.test(active))continue;
     const haystack = `${entry.name} ${purpose}`;
     const shared = terms(haystack).filter(x=>queryTerms.has(x));
@@ -465,6 +555,14 @@ function adviseCapabilitiesBase(assessment, options = {}) {
       const escaped=String(x).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
       return new RegExp(`(?:\\$|使用\\s*|调用\\s*|用\\s*|use\\s+|invoke\\s+)${escaped}(?=$|[^a-z0-9_-])`,'i').test(active);
     });
+    // Sharing the word LaTeX does not make project creation relevant to a
+    // compile-only task (or compiling relevant to an explanation/new project).
+    if(!explicit&&latexPurpose.compile&&!semantics.some(n=>n.kind==='latex-compile'))continue;
+    if(!explicit&&latexPurpose.create&&!semantics.some(n=>n.kind==='latex-create-project'||n.kind==='latex-create-document'))continue;
+    if(!explicit&&needs.some(n=>n.kind==='latex-compile')&&!semantics.some(n=>n.kind==='latex-compile')
+        &&/^(?:explain|describe|teach|explanation|说明|解释|讲解)/i.test(purpose)
+        &&/(?:\b(?:latex|tex)\b|\.tex\b)/i.test(purpose)
+        &&!/(?:解释|说明|讲解|explain|describe|teach)/i.test(active))continue;
     // A safety column in local data is not evidence of a family account or
     // parental-controls task. Explicit tool names retain their normal gates.
     const familyTool=entry.kind==='tool'&&/(?:^|__)safety_settings_/i.test(entry.name);
@@ -526,7 +624,8 @@ function adviseCapabilitiesBase(assessment, options = {}) {
     if (/dynamic.skill.router/.test(norm(`${entry.name} ${entry.server}`)) && !/路由|router/i.test(active)) continue;
     let op = entry.kind==='tool' ? operation(entry) : {action:'discover',phase,effect:'unknown'};
     if(entry.kind==='tool'&&semantic&&op.effect!=='high-impact'&&op.effect!=='external-write') {
-      if(semantic.kind==='image-create'||semantic.kind==='image-edit'||semantic.kind==='scheduled-reminder'||semantic.kind==='reminder-manage'||semantic.kind.startsWith('artifact-edit:'))op={action:'change',phase:'implementation',effect:'write-or-unknown'};
+      if(semantic.kind==='image-create'||semantic.kind==='image-edit'||semantic.kind==='scheduled-reminder'||semantic.kind==='reminder-manage'||semantic.kind==='latex-create-project'||semantic.kind==='latex-create-document'||semantic.kind.startsWith('artifact-edit:'))op={action:'change',phase:'implementation',effect:'write-or-unknown'};
+      else if(semantic.kind==='latex-compile')op={action:'verify',phase:'validation',effect:entry.annotations?.readOnlyHint===true?'read':'unknown'};
       else if(op.action!=='change'||/^run$/i.test(entry.name.split('__').at(-1)))op={action:'read',phase:'discovery',effect:entry.annotations?.readOnlyHint===true?'read':'unknown'};
     }
     let score = shared.length*4+(explicit?24:0)+(semantic?18:0)+(supportedFeedback?12:0);
@@ -544,6 +643,12 @@ function adviseCapabilitiesBase(assessment, options = {}) {
     const gates = ['confirm-task-benefit','inspect-exact-schema-and-inputs','respect-current-user-authorization'];
     if(semantics.some(x=>x.kind==='reminder-manage'))gates.push('resolve-existing-reminder-and-preserve-settings');
     if(semantics.some(x=>x.kind==='academic-read'))gates.push('verify-paper-id-question-and-indexed-full-text');
+    if(semantics.some(x=>x.kind==='latex-compile')) {
+      gates.push('verify-current-tex-project-and-main-file');
+      if(/\bwithout\s+exporting\s+(?:a\s+)?pdf\b/i.test(purpose))gates.push('diagnostics-do-not-export-pdf');
+    }
+    if(semantics.some(x=>x.kind==='latex-create-project'))gates.push('verify-new-project-destination-and-no-overwrite');
+    if(semantics.some(x=>x.kind==='latex-create-document'))gates.push('verify-tex-document-path-and-dedicated-project-directory');
     if(semantics.some(x=>x.kind==='image-edit'||x.kind==='image-read'))gates.push('verify-required-image-input');
     if(semantics.some(x=>x.kind==='image-read')&&localImageOnly)gates.push('verify-local-image-path');
     if(semantics.some(x=>x.kind==='image-edit')&&/\bupload\b.{0,120}\b(?:attachment|image|photo|reference)\b|\b(?:attachment|image|photo|reference)\b.{0,120}\bupload\b/i.test(entry.description))gates.push('verify-external-input-transfer-and-access');

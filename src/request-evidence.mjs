@@ -313,6 +313,27 @@ function specifiedSiteDirective(clause) {
     ||/\b(?:search|query|consult|cite|use|browse|visit)\b.{0,70}\b(?:site|website|domain)\b.{0,25}\b(?:only|solely)\s*[.!]?\s*$/i.test(direct);
 }
 
+// These expressions require explicit whole-request scope. Keep comma-separated
+// English scope and imperative together; punctuation, quotes and later tasks
+// must not turn a discussion or a conditional future into a current limit.
+function currentWholeRequestDirective(text,pattern) {
+  const sentences=String(text).split(/(?<=[。；;！？!?，\n])|(?<!\d)(?<=\.)(?=\s+\S)/u)
+    .flatMap(s=>s.split(/(?:但是|然而|而是|但(?!\s*不)|同时|另外|\bbut\b(?!\s+not\b)|\b(?:however|instead)\b)/iu));
+  for(const sentence of sentences) {
+    pattern.lastIndex=0;
+    for(const match of sentence.matchAll(pattern)) {
+      const before=sentence.slice(0,match.index);
+      const after=sentence.slice(match.index+match[0].length);
+      if(/(?:以后|将来|未来|下次|日后|后续|下一次|如果|假如|假设|一旦|获准后|批准后|得到授权后|不必|无需|无须|不用|不需要|不要求|并非|并不|不是|未必|不一定|别要求|不要要求|没有说|没说|未说|没要求|没有要求|未要求|没规定|没有规定|不意味着|不代表|解释|说明|讨论|讲解|探讨|请问|询问|是否|要不要)[^。；;，]{0,60}$/u.test(before))continue;
+      if(/\b(?:next|future|later|if|once|when|whether|explain|describe|discuss|consider|ask|why|how|not|never|no|don't|didn't|isn't|wasn't)\b[^.;!?]{0,80}$/i.test(before))continue;
+      if(/^\s*(?:吗|么|是否|[?？]|以外|之外|除[^，。；]{0,20}以外|除了|不包括|except\b|unless\b|excluding\b|but\s+not\b)/iu.test(after))continue;
+      if(/^\s*(?:if|when|once|after)\b[^.;!?]{0,55}\b(?:approv\w*|authori[sz]\w*|permi\w*)\b/i.test(after))continue;
+      return true;
+    }
+  }
+  return false;
+}
+
 export function inferUserConstraints(query='',activeText='',activeClauses=[]) {
   // A URL is an input, never an instruction, even when its query contains
   // words such as “禁止联网” or “只读”. Keep a marker for source-scope intent.
@@ -451,9 +472,13 @@ export function inferUserConstraints(query='',activeText='',activeClauses=[]) {
     return /(?:USER_SUPPLIED_URL|(?:提供|给定|给的|我给|附上|附带|发给).{0,12}(?:链接|网址|网页|网站)|\b(?:provided|supplied|given|attached)\s+(?:urls?|links?|websites?|pages?)\b)/i.test(permitted)
       &&/(?:打开|访问|读取|阅读|查看|浏览|使用|用|\b(?:open|visit|read|fetch|use|consult)\b)/i.test(permitted);
   });
-  const networkForbidden=clauses.some(c=>{
+  const wholeRequestOffline=currentWholeRequestDirective(text,/(?:整个|整体|全部|全体|所有|各项|每项)(?:的)?(?:任务|需求|要求|项目|工作|流程)(?:的)?\s*(?:(?:都|均|须|应|需要|必须|务必|严格|完全|始终|全程|保持|维持|处于|处在)\s*){0,5}(?:离线|断网)(?:状态|模式|环境)?|\bfor\s+(?:the\s+)?(?:entire|whole|full|overall)\s+(?:assignment|task|project|request)\s*,?\s*(?:please\s+)?(?:stay|remain|work|operate|run)\s+(?:(?:fully|strictly|completely)\s+)?(?:offline|disconnected(?:\s+from\s+(?:the\s+)?(?:internet|network))?)\b|\b(?:(?:the\s+)?(?:entire|whole|full)\s+(?:assignment|task|project|request)|(?:all|both|each|every)\s+(?:tasks?|assignments?|parts?|sections?|stages?))\s+(?:must|shall|needs?\s+to)\s+(?:be|stay|remain|run|operate)\s+(?:(?:fully|strictly|completely)\s+)?(?:offline|disconnected(?:\s+from\s+(?:the\s+)?(?:internet|network))?)\b/giu);
+  const wholeRequestWithoutNetwork=currentWholeRequestDirective(text,/\b(?:do|complete|perform|carry\s+out|execute|handle|finish)\s+(?:everything|all\s+(?:the\s+)?(?:work|tasks?|steps?|parts?|sections?)|(?:the\s+)?(?:entire|whole|full)\s+(?:task|assignment|project|request))\s+(?:(?:fully|strictly|completely)\s+)?(?:without|with\s+no)\s+(?:(?:any|an?|the)\s+)?(?:(?:internet|network|online)\s+(?:access|connection|connectivity)|(?:access|connection)\s+to\s+(?:the\s+)?(?:internet|network)|(?:internet|network))\b/giu);
+  const networkForbidden=wholeRequestOffline||wholeRequestWithoutNetwork||clauses.some(c=>{
     // Strip negated prohibitions first; "不禁止联网" does not forbid access.
-    let direct=c.replace(/(?:不要|不用|无需|无须|不必|不需要|不要求|不强制|并非|并不|不是|没有|未曾|未明确|未|不)\s*(?:完全)?\s*(?:禁止|禁用|限制|关闭|断开|停用|不许|不准|不可以|不能)\s*(?:联网|连网|连互联网|上网|网络|互联网|外网|网络访问|访问网络|连接网络)/g,'')
+    let direct=c.replace(/(?:没有说|没说|未说|没有要求|没要求|未要求|没有规定|没规定)\s*(?:整个|整体|全部|全体|所有)(?:的)?(?:任务|需求|要求|项目|工作|流程)(?:的)?\s*(?:(?:都|均|须|应|需要|必须|务必|严格|完全|始终|全程|保持|维持|处于|处在)\s*){0,5}(?:断网|离线)(?:状态|模式|环境)?/gu,'')
+      .replace(/(?:说明|解释|介绍|讨论|描述|讲解)\s*(?:一下)?\s*(?:整个|整体|全部|全体|所有)(?:的)?(?:任务|需求|要求|项目|工作|流程)(?:的)?\s*(?:(?:都|均|须|应|需要|必须|务必|严格|完全|始终|全程|保持|维持|处于|处在)\s*){0,5}(?:断网|离线)(?:状态|模式|环境)?(?:的)?(?:含义|概念|意义|原理|机制|定义|区别|原因|必要性)/gu,'')
+      .replace(/(?:不要|不用|无需|无须|不必|不需要|不要求|不强制|并非|并不|不是|没有|未曾|未明确|未|不)\s*(?:完全)?\s*(?:禁止|禁用|限制|关闭|断开|停用|不许|不准|不可以|不能)\s*(?:联网|连网|连互联网|上网|网络|互联网|外网|网络访问|访问网络|连接网络)/g,'')
       .replace(/(?:不要|不用|无需|无须|不必|不需要|不要求|不强制|并非|并不|不是|没有|未曾|未|不)\s*(?:完全)?\s*(?:禁止|禁用|限制|不许|不准|不可以|不能)\s*(?:(?:将|让)\s*)?(?:(?:电脑|计算机|设备|机器|系统)\s*)?(?:连接|接入|访问|使用|连)\s*(?:(?:到|任何|所有|全部|外部|的)\s*){0,4}(?:网络|互联网|外网)/gu,'')
       .replace(/(?:不要|不用|无需|无须|不必|不需要|不要求|不强制|并非|不是)\s*(?:只|仅|完全)?\s*离线(?:模式|操作|完成|使用)?/g,'')
       .replace(/(?:不要|不得|不准|不许|不可以|请勿|不用|无需|无须|不必|不需要|不要求|不强制|不允许|不能|没有(?:要求|说)?|没说|并非|并不|不是|未曾|未|不)\s*(?:(?:将|让)?(?:电脑|计算机|设备|机器|系统)\s*)?(?:(?:全程|全过程|始终|一直|保持|维持|处于|处在|进入|要求)\s*){0,4}(?:断网|离线)(?:状态|模式|环境)?/gu,'')
@@ -526,7 +551,8 @@ export function inferUserConstraints(query='',activeText='',activeClauses=[]) {
     ||/(?<!不)(?<!不要)(?<!不能)(?<!不得)(?<!并非)(?<!严禁)(?<!请勿)(?<!无需)(?<!无须)(?<!不必)(?<!不需要)(?<!禁止)(?:允许|可以|可|请)\s*(?:再|也|还|去)?\s*(?:联网|上网)(?:查证|核验|核实|检索|搜索|查找|查询|补充)?/u.test(c)
     ||/(?:^|并|同时|然后|再|还|也)\s*(?:请)?\s*(?:联网|上网)(?:查证|核验|核实|检索|搜索|查找|查询|补充)/u.test(c)
     ||/(?<!not )(?<!never )\b(?:can|may|please|allowed to)\s+(?:also\s+)?(?:search|consult|use|read|research)\b.{0,30}\b(?:other|additional|external|outside)\b.{0,16}\b(?:sources?|materials?|references?|data|information)\b/i.test(c));
-  const providedOnly=localOnly||clauses.some(c=>{
+  const wholeRequestProvidedOnly=currentWholeRequestDirective(text,/(?:整个|整体|全部|全体|所有|各项|每项)(?:的)?(?:任务|需求|要求|项目|工作|流程|部分|章节|阶段)(?:的)?\s*(?:(?:全部|所有)(?:的)?)?\s*(?:资料|来源|材料|数据|信息)(?:的)?(?:来源)?\s*(?:只能|仅能|仅限|只|仅)\s*(?:来自|来源于|源自|取自)\s*(?:我|用户)?(?:所附|附上|附带|提供|给定|上传|所给|已给|随附)(?:的)?\s*(?:附件|文件|文档|资料|材料|原文|数据|文本|链接)/gu);
+  const providedOnly=localOnly||wholeRequestProvidedOnly||clauses.some(c=>{
     if(sourceNegated(c))return false;
     const direct=sourceDirective(c);
     const explanatory=/(?:说明|解释|介绍|讨论|描述|讲解|分析|研究|探讨)\s*(?:一下)?\s*(?:为何|为什么|如何)\s*(?:不|勿|不要|请勿)/u.test(direct);
