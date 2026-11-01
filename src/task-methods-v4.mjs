@@ -1,4 +1,5 @@
 import {readFileSync} from 'node:fs';
+import {optionComparison} from './task-intents.mjs';
 
 const text = value => typeof value === 'string' ? value.normalize('NFKC').toLowerCase() : '';
 const list = value => Array.isArray(value) ? value : [];
@@ -37,10 +38,13 @@ const rules = [
     match: t => /(?:其他行业|其他领域|跨领域).{0,30}(?:解法|借鉴|相似机制|迁移机制)|(?:常规|业内|本行业).{0,20}(?:解法|办法|方案).{0,15}(?:失效|想不出|走不通)/u.test(t),
     reason:'当前领域的常规办法不足，需要检查其他领域是否有可迁移机制。', priority:58},
   {id:'two-sided-steelman', family:'decision', aliases:['双向钢人论证','双向钢人','steelman','steelmanning'],
-    match: t => /(?:纠结|难以选择|犹豫不决|怎么选).{0,40}(?:两个|两种|方案|选项|还是)|(?:两个|两种).{0,15}(?:方案|选项|方向).{0,20}(?:都说得通|都有道理|难以取舍)|(?:支持和反对|双方最强理由)/u.test(t),
+    match: (t,a) => /(?:纠结|难以选择|犹豫不决|怎么选).{0,40}(?:两个|两种|方案|选项|还是)|(?:两个|两种).{0,15}(?:方案|选项|方向).{0,20}(?:都说得通|都有道理|难以取舍)|(?:支持和反对|双方最强理由)/u.test(t)
+      || optionComparison(a.activeText)&&/(?:支持|赞成)(?:与|及|以及)反对.{0,8}(?:理由|论证)|(?:双方|各自).{0,8}(?:最强|最有力).{0,10}(?:理由|论据)/u.test(t),
     reason:'真实选择存在有力的不同方向，需要找出改变选择的关键变量。', priority:69},
   {id:'minimal-experiment', family:'experiment', aliases:['最小实验','低成本验证实验','minimum experiment','minimal experiment'],
-    match: t => /(?:关键假设|商业假设|需求假设).{0,25}(?:验证|试验|试错)|(?:纸上谈兵|空想|分析瘫痪).{0,30}(?:验证|行动|实验)|(?:低成本|可逆).{0,20}(?:实验|试验|试做)/u.test(t),
+    match: t => /(?:关键假设|商业假设|需求假设).{0,25}(?:验证|试验|试错)|(?:纸上谈兵|空想|分析瘫痪).{0,30}(?:验证|行动|实验)|(?:低成本|可逆).{0,20}(?:实验|试验|试做)/u.test(t)
+      || /(?:制定|编写|设计|给出|提供|准备|写).{0,12}(?:验证|试点)(?:计划|方案)/u.test(t)
+        && /(?:低成本|可逆).{0,20}(?:验证|试点)(?:计划|方案)|(?:验证|试点)(?:计划|方案).{0,12}(?:可逆|低成本)/u.test(t),
     reason:'决定取决于尚未验证的假设，短小可逆的实验能够补充现实信息。', priority:71},
   {id:'personal-strength-exploration', family:'personal', personal:true, aliases:['挖掘隐藏天赋','隐藏天赋探索'],
     match: t => /(?:帮我|陪我|我想|我希望).{0,16}(?:挖掘|寻找|发现|探索|了解).{0,12}(?:我的|自身|自己|个人)?(?:隐藏)?(?:天赋|优势)|(?:我|自己).{0,8}(?:没有|没什么|有什么|有哪些).{0,5}天赋/u.test(t),
@@ -83,6 +87,28 @@ function explicitlyRequested(active, aliases) {
   });
 }
 
+// Only source-filtered, current clauses enter here. Keep named directives in
+// source order so a later explicit correction replaces an earlier prohibition.
+export function methodDirectives(clauses=[]) {
+  const directives=[];
+  for(const clause of clauses){
+    const normalized=text(clause);
+    const prohibition=/(?:不要|不得|禁止|不准|不允许|不能|不用|无需|无须)(?:再|实际|自动|主动)?(?:使用|采用|应用|运用|进行|用)?\s*|\b(?:do not|don't|must not|never)\s+(?:use|apply|adopt)\s+/iu.exec(normalized);
+    for(const rule of rules){
+      const forbidden=prohibition&&rule.aliases.some(alias=>{
+        const index=normalized.indexOf(text(alias),prohibition.index+prohibition[0].length);
+        if(index<0)return false;
+        let prefix=normalized.slice(prohibition.index+prohibition[0].length,index);
+        for(const other of rules.flatMap(item=>item.aliases).sort((a,b)=>b.length-a.length))prefix=prefix.replaceAll(text(other),'');
+        return /^(?:\s|和|与|及|、|以及|,|，|\band\b)*$/u.test(prefix);
+      });
+      if(forbidden)directives.push({id:rule.id,mode:'forbid'});
+      else if(explicitlyRequested(normalized,rule.aliases))directives.push({id:rule.id,mode:'allow'});
+    }
+  }
+  return directives;
+}
+
 function personalRequestAllowed(active) {
   // Writing a biography, translating a prompt or building an application is not
   // a request to interview the user or infer a personal psychological profile.
@@ -92,7 +118,7 @@ function personalRequestAllowed(active) {
 }
 
 /**
- * Return at most two advisory cards. Only trusted, scope-filtered activeText can
+ * Return at most two advisory cards. Only trusted, scope-filtered active clauses can
  * trigger a method: raw prompts, attachments and ungrounded task metadata cannot.
  * The host chooses skip / consult / adapt / execute; this function executes none.
  */
@@ -108,11 +134,14 @@ export function adviseTaskMethods(assessment = {}, options = {}) {
   if (options.routingMode === 'fast' && !hasRecovery) return [];
   const active = text(assessment.activeText).trim();
   if (!active || assessment.selfContainedFunction === true && !hasRecovery) return [];
+  const methodClauses=Array.isArray(assessment.methodClauses)
+    ? assessment.methodClauses.map(text).filter(Boolean) : [active];
   const disabled = new Set(list(policy.disabledIds));
+  const namedPolicy=new Map(list(assessment.methodDirectives).map(item=>[item.id,item.mode]));
   const candidates = rules.flatMap(rule => {
-    if (disabled.has(rule.id) || rule.personal && !personalRequestAllowed(active)) return [];
+    if (disabled.has(rule.id) || namedPolicy.get(rule.id)==='forbid' || rule.personal && !personalRequestAllowed(active)) return [];
     const explicit = explicitlyRequested(active, rule.aliases);
-    const concreteGap = rule.match(active, assessment, options);
+    const concreteGap = methodClauses.some(clause=>rule.match(clause, assessment, options));
     if (!explicit && !concreteGap) return [];
     if (options.nativeSufficient === true && !hasRecovery && !explicit) return [];
     return [{...rule, explicit, score:rule.priority + (explicit ? 100 : 0)}];

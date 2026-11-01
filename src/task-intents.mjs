@@ -122,7 +122,23 @@ export const accessibilityNeed = text => /无障碍|可访问性|wcag|\ba11y\b|�
 export const businessAnalysis = text => /商业分析|市场分析|市场规模|竞品|收费方案|商业可行性|盈利|盈亏|\b(?:market|business|competitive|consumer|brand|financial|industry)\b.{0,25}\b(?:analysis|report|research|insights?|sizing|feasibility)\b/i.test(text)
  || /供应商|采购|\b(?:vendor|supplier|procurement)\b/i.test(text)&&/预算|成本|报价|选型|比较|\b(?:budget|cost|price|select|compar)\w*/i.test(text);
 export const experimentWork = text => /实验(?!仪器|设备|器材|耗材|室)|试验|研究日志|随机分组|随机化|随机运行|重复测量|\bexperiments?\b|randomi[sz]|confound|factorial|treatment|lab notebook/i.test(text);
-export const experimentDesign = text => experimentWork(text) && /设计|规划|对照|随机|区组|混杂|样本量|复现|重复|design|plan|control|random|block|confound|replicat|sample size/i.test(text);
+export const experimentDesign = text => taskStructure(text).clauses.some(clause => {
+ // A fixed seed, repetition count or sample size describes execution, not a
+ // request to choose a design. Require an action on a study/design decision.
+ const study=/(?:实验|试验)(?!日志|笔记|仪器|设备|器材|耗材|室|数据|报告|记录)|研究方案|研究设计|\b(?:experiments?|trials?|stud(?:y|ies))(?!\s+(?:logs?|notebooks?|equipment|data|reports?|records?)\b)\b|\bexperimental\s+design\b/i;
+ const designAction=/设计|规划|制定|\b(?:design|plan)\b/i;
+ const reviewAction=/审查|审阅|评审|评估|选择|安排|决定|\b(?:choose|select|review|audit|assess|evaluate|decide|arrange)\w*\b/i;
+ const designObject=/(?:实验|试验|研究)(?:方案|设计)|(?:随机|分组|区组|分层|对照|因子|重复)(?:设计|方案|安排|分配)|\b(?:experimental|trial|study)\s+design\b|\b(?:design|allocation|randomi[sz]ation|blocking|replication)\s+(?:of|for|plan|scheme)\b/i;
+ const replicationDecision=/(?:决定|选择|确定|安排).{0,12}(?:独立)?重复(?:次数|数量|层级)|\b(?:decide|choose|determine)\b.{0,35}\b(?:number|level)\s+of\s+(?:independent\s+)?replicat\w*/i;
+ const allocationAction=/分配|分组|随机化|随机分组|随机运行|\b(?:assign|allocate|randomi[sz])\w*\b/i;
+ const units=/受试|样本|小鼠|患者|地块|处理|组别|实验单位|运行顺序|\b(?:subjects?|samples?|mice|patients?|plots?|treatments?|arms?|units?|run order)\b/i;
+ const designIssue=/混杂|区组|分层|对照组|伪重复|偏倚|\b(?:confound|block|stratif|control group|pseudoreplicat|bias)\w*/i;
+ return study.test(clause)&&designAction.test(clause)
+   || study.test(clause)&&replicationDecision.test(clause)
+   || reviewAction.test(clause)&&designObject.test(clause)
+   || allocationAction.test(clause)&&units.test(clause)
+   || /避免|控制|消除|检查|核查|\b(?:avoid|control|remove|check|inspect)\w*\b/i.test(clause)&&designIssue.test(clause);
+});
 export const electricalDesign = text => /嘉立创|立创EDA|\beasyeda\b|\bkicad\b|\bpcb\b|电路|原理图|circuit|schematic/i.test(text)
  && /设计|做|建立|创建|绘制|编辑|连通|布线|封装|焊盘|网表|引脚|build|create|design|edit|connect|routing|footprint|netlist|pins?\b/i.test(text);
 export const electricalInspection = text => /嘉立创|立创EDA|\beasyeda\b|\bkicad\b|\bpcb\b|电路|原理图|circuit|schematic/i.test(text)
@@ -184,7 +200,7 @@ export const imageArtifact = text => {
 
 export const numericalComputation = text => /数值(?:计算|求解|模拟|分析)|微分|(?:定|不定|数值|曲线|二重|三重)积分|积分(?:法|器|到|求解|计算)|递推|收敛|误差阶|\b(?:numerical|euler|heun|runge.kutta|ode|quadrature|convergence)\b/i.test(text)
  && /计算|求解|编写|实现|运行|比较|绘制|误差|\b(?:comput|calculat|solv|implement|run|compar|error|integrat)\w*/i.test(text);
-export const optionComparison = text => /比较|对比|选型|选择|推荐|取舍|\b(?:compar|select|recommend|decid)\w*/i.test(text)
+export const optionComparison = text => /比较|对比|选型|选择|选定|推荐|取舍|\b(?:compar|select|recommend|decid)\w*/i.test(text)
  && /方案|供应商|候选|选项|容量|预算|成本|条件|约束|\b(?:options?|vendors?|alternatives?|budget|cost|constraints?)\b/i.test(text);
 export const supportsWordAuthoring = skill => {
  const identity=[skill.id,skill.name,skill.nameZh].filter(Boolean).join(' ');

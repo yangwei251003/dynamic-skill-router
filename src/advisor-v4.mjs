@@ -7,7 +7,7 @@ import {inferCapability, inferSkillStage, skillDomainCompatible, capabilityActio
 import {adviseCapabilities} from './capabilities-v4.mjs';
 import {planRecovery, useFastPath} from './recovery-v4.mjs';
 import {taskText} from './task-input.mjs';
-import {adviseTaskMethods} from './task-methods-v4.mjs';
+import {adviseTaskMethods,methodDirectives} from './task-methods-v4.mjs';
 import {assessRestrictions,negativeRequestPattern,positiveRequestPrefix,sharedEnglishNegation} from './task-restrictions.mjs';
 import {closedSuppliedProse} from './supplied-prose.mjs';
 import {closedSuppliedPresentation,closedSuppliedFormatting} from './native-closure.mjs';
@@ -153,12 +153,14 @@ function queryClauses(query) {
     .replace(/'[^'\n]+'(?=\s|[.,，。;；]|$)/g, maskQuote)
     .replace(/^\s*>.*$/gm, ' ');
   const scopedClauses=sharedEnglishNegation(withoutQuotes);
-  const clauses = scopedClauses.split(/[。！？!?;；，,\n]+|\.(?=\s|$)|而(?:是|要)|但是|但(?=请|要|需|改为|可以)|\bbut\b|\binstead\b/i).map((value) => value.trim()).filter(Boolean);
+  const parts = scopedClauses.split(/([。！？!?;；，,\n]+|\.(?=\s|$)|而(?:是|要)|但是|但(?=请|要|需|改为|可以)|\bbut\b|\binstead\b)/i);
+  const sourceClauses = parts.flatMap((value,index) => index % 2 ? [] : [{value:value.trim(),before:parts[index-1] || ''}]);
+  const clauses = sourceClauses.map(item=>item.value).filter(Boolean);
   const futurePattern=/以后|将来|未来|后续|下一步|届时|日后|(?:计划|准备|打算)(?:再|之后|以后)|(?:等|待)(?:我|用户|客户|审批|确认|授权).{0,20}(?:确认|批准|授权|同意|后)|(?:确认|批准|授权)后|\bafter\s+(?:approval|confirmation|I\s+(?:approve|confirm))|\bonce\s+(?:approved|confirmed|I\s+(?:approve|confirm))|eventually|later|future|subsequently/i;
   const isFuture = (value) => futurePattern.test(value);
   const negativePattern=negativeRequestPattern;
   const isNegative = (value) => negativePattern.test(value);
-  const active = clauses.flatMap((value) => {
+  const currentRequest = (value) => {
     if(/^(?:并)?(?:不是|并非|而非)|^(?:not\b|rather than\b)/i.test(value))return [];
     const source = value.split(/(?:例如|比如|举例|示例|for example|e\.g\.)/i)[0];
     // A negative attribute qualifies the requested object. It does not cancel
@@ -175,12 +177,33 @@ function queryClauses(query) {
     const beforeFuture = planning.split(futurePattern)[0];
     const beforeNegative = positiveRequestPrefix(beforeFuture);
     return beforeNegative.trim() && !isNegative(beforeNegative) ? [beforeNegative.trim()] : [];
-  });
+  };
+  const active = clauses.flatMap(currentRequest);
+  // Keep only adjacent, completely retained comma clauses together for method
+  // advice. Hard sentence boundaries, omitted text and truncated prohibitions
+  // are barriers. Retrieval and permission assessment keep their old projection.
+  const methodClauses=[];
+  let methodGroup='';
+  const flushMethodGroup=()=>{if(methodGroup)methodClauses.push(methodGroup);methodGroup='';};
+  const methodAction=/研究|调研|分析|解释|比较|对比|评估|设计|制作|编写|创建|\b(?:research|analyse|analyze|explain|compare|evaluate|design|create|write)\b/i;
+  const topicStop=new Set('研究 调研 分析 解释 比较 对比 评估 设计 制作 编写 创建 历史 发展 历程 横向 同类 目前 research analysis explain compare evaluate design create history development'.split(' '));
+  const topicTerms=value=>words(value).filter(term=>!topicStop.has(term));
+  const topicContinues=part=>!methodAction.test(part)
+    || /(?:它|该|此|同一|上述|其(?!他)|\b(?:it|its|same|this|these|those)\b)/i.test(part)
+    || topicTerms(part).some(term=>topicTerms(methodGroup).includes(term));
+  for(const item of sourceClauses){
+    const projected=currentRequest(item.value)[0] || '';
+    const complete=projected===item.value;
+    if(!/^[，,]+$/.test(item.before)||!complete||!projected||!topicContinues(projected))flushMethodGroup();
+    if(projected)methodGroup+=(methodGroup?'，':'')+projected;
+    if(!complete)flushMethodGroup();
+  }
+  flushMethodGroup();
   const constraintText = clauses.map(value => value.split(/(?:例如|比如|举例|示例|for example|e\.g\.)/i)[0]).join('\n');
   // Preserve sentence boundaries for scoped restrictions: a comma may continue
   // a protected object, whereas a new sentence can state a global prohibition.
   const restrictionText=scopedClauses.replace(/(?:例如|比如|举例|示例|for example|e\.g\.)[^。！？!?;；，,\n]*/gi,'');
-  return {active, future: clauses.filter(isFuture), negative: clauses.filter(isNegative), raw, constraintText, restrictionText};
+  return {active,methodClauses,methodDirectives:methodDirectives(clauses.filter(value=>!isFuture(value)).map(value=>value.split(/(?:例如|比如|举例|示例|for example|e\.g\.)/i)[0])), future: clauses.filter(isFuture), negative: clauses.filter(isNegative), raw, constraintText, restrictionText};
 }
 
 function lexicalScore(haystack, needle) {
@@ -216,7 +239,7 @@ export function taskAssessment(query, taskContext = {}, invocationContext = {}) 
   const suppliedOperation = closedSuppliedProse(taskText(query))||closedSuppliedPresentation(taskText(query))||closedSuppliedFormatting(query);
   // Only a complete input-closed grammar may remove data from retrieval. The
   // original request and actual restrictions remain available for host review.
-  const clauses = suppliedOperation ? {...parsedClauses,active:[suppliedOperation.instructionText]} : parsedClauses;
+  const clauses = suppliedOperation ? {...parsedClauses,active:[suppliedOperation.instructionText],methodClauses:[suppliedOperation.instructionText]} : parsedClauses;
   const activeText = clauses.active.join('\n');
   const structure = taskStructure(activeText);
   const strings = values => unique(list(values).filter(value => typeof value === 'string' && value.trim()).map(value => value.trim()));
@@ -274,7 +297,7 @@ export function taskAssessment(query, taskContext = {}, invocationContext = {}) 
     explicitSkills,
     constraints,
     complexity, taskType, complexityEvidence: unique(complexitySignals), development, complexDevelopment, selfContainedFunction, readOnly,
-    activeText, activeClauses: clauses.active, negativeRequests:clauses.negative, constraintClauses:clauses.constraintText.split('\n').filter(Boolean),
+    activeText, activeClauses: clauses.active, methodClauses:clauses.methodClauses, methodDirectives:clauses.methodDirectives, negativeRequests:clauses.negative, constraintClauses:clauses.constraintText.split('\n').filter(Boolean),
     originalRequest: clauses.raw,
     suppliedOperation,
     acceptanceCriteria, capabilityNeeds, evidence,
