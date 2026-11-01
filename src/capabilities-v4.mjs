@@ -1,5 +1,6 @@
 import {validateHostOptions,exactToolConsultations} from './host-context-contract.mjs';
 import {invocationConstraints,constrainCapability} from './invocation-constraints.mjs';
+import {requestSegments,negativeDirective} from './request-evidence.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -109,14 +110,18 @@ export function discoverCapabilities(options = {}) {
       && !serverEntry?.disabledTools?.some(x=>x===shortName || x===item.name);
     const annotations = {};
     for (const key of ['readOnlyHint','destructiveHint','idempotentHint','openWorldHint']) if (typeof item.annotations?.[key] === 'boolean') annotations[key]=item.annotations[key];
+    // A host runtimeTools entry is a registered handle, not proof of
+    // authentication or successful access. A capabilities-only name is weaker.
+    const callable=enabled?(named.has(item.name)||item.available===true?true:null):false;
+    const declaredAvailable=typeof item.available==='boolean'?item.available:null;
     const entry = {id:`tool:${item.name}`,kind:'tool',name:item.name,server,plugin:plugin?.plugin || item.plugin || null,
-      description:text(item.description),configured:false,enabled,callable:enabled,evidence:'runtime-tool',annotations};
+      description:text(item.description),configured:false,enabled,callable,declaredAvailable,evidence:callable===true?'runtime-tool':enabled?'runtime-capability-name-only':'runtime-tool-disabled',annotations};
     entries.set(entry.id,entry);
-    if (plugin) { plugin.tools.push(entry.name); plugin.callable ||= enabled; }
+    if (plugin) { plugin.tools.push(entry.name); plugin.callable ||= callable===true; }
     if (server) {
       const serverId=`mcp:${server}`;
       const group = serverEntry || entries.get(serverId) || {id:serverId,kind:'mcp',name:server,description:'',plugin:null,configured:false,enabled:true,callable:false,evidence:'runtime-tool',tools:[]};
-      group.tools.push(entry.name); group.callable ||= enabled; if (enabled) group.evidence='runtime-tool'; entries.set(serverId,group);
+      group.tools.push(entry.name); group.callable ||= callable===true; if (callable===true) group.evidence='runtime-tool'; entries.set(serverId,group);
     }
   }
   const capabilities = [...entries.values()].map(e=>({...e,...(e.tools ? {tools:unique(e.tools)} : {})}));
@@ -127,11 +132,11 @@ export function discoverCapabilities(options = {}) {
     hostConfigScanned:codex || Boolean(options.configPath),authority:'Current host metadata only; never inferred from installed files.'}};
 }
 
-const STOP = new Set('the a an to of in on for and or with by from is are this that use using tool tools mcp plugin plugins api server get list create update read write run execute task tasks help useful available function request user support supports provides access part'.split(' '));
+const STOP = new Set('the a an to of in on for and or with by from is are it its this that these those use using tool tools mcp plugin plugins api server get list create update read write run execute return returns task tasks help useful available function request user support supports provides access part'.split(' '));
 const segmenter = new Intl.Segmenter('zh',{granularity:'word'});
 function terms(value) {
   const source = norm(value).replace(/https?:\/\/\S+/g,' ');
-  const result = (source.match(/[a-z][a-z0-9]+/g)||[]).map(x=>x.replace(/(ing|s)$/,''));
+  const result = (source.match(/[a-z][a-z0-9]+/g)||[]).filter(x=>!STOP.has(x)).map(x=>x.replace(/(ing|s)$/,'')).filter(x=>!STOP.has(x));
   for (const part of segmenter.segment(source)) if (/\p{Script=Han}/u.test(part.segment) && part.segment.length>=2) result.push(part.segment);
   const bridges = [
     [/数据库|postgres|sql|database/,['database']], [/原理图|电路|pcb|easyeda|schematic/,['circuit']],
@@ -140,7 +145,7 @@ function terms(value) {
     [/文档|documentation|docs/,['documentation']], [/文档|document|file/,['document']], [/搜索|检索|查找|search/,['search']],
     [/测试|test|验证|verify|validation/,['test']], [/部署|上线|发布|deploy|publish/,['deploy']],
     [/幻灯片|演示文稿|slides|presentation/,['slides']], [/表格|spreadsheet|excel/,['spreadsheet']],
-    [/邮件|email|mail/,['email']], [/日历|calendar/,['calendar']], [/图像|图片|image/,['image']],
+    [/邮件|email|mail/,['email']], [/日历|calendar/,['calendar']], [/图像|图片|照片|插画|海报|image|photo|illustration|poster/,['image']],
     [/迁移|migration/,['migration']], [/日志|logs/,['logs']], [/错误|error|故障|debug/,['debug']],
   ];
   for (const [pattern, additions] of bridges) if (pattern.test(source)) result.push(...additions);
@@ -154,7 +159,7 @@ function operation(entry) {
   if (/\b(deploy|publish|release|merge|purchase|pay|delete|remove|drop|destroy)\b/.test(name)) return {action:'commit',phase:'delivery',effect:'high-impact'};
   if (/\b(create|update|edit|write|insert|upload|push|apply|execute|exec|run|query|generate|mutate|change|set|add)\b/.test(name)) return {action:'change',phase:'implementation',effect:'write-or-unknown'};
   if (/\b(test|validate|verify|check|inspect|screenshot)\b/.test(name)) return {action:'verify',phase:'validation',effect:entry.annotations?.readOnlyHint === true?'read':'unknown'};
-  if (/\b(search|find|fetch|get|list|read|browse|lookup|resolve|open|status|windows)\b/.test(name) || entry.annotations?.readOnlyHint===true) return {action:'read',phase:'discovery',effect:entry.annotations?.readOnlyHint===true?'read':'unknown'};
+  if (/\b(search|find|fetch|get|list|read|view|browse|lookup|resolve|open|status|windows)\b/.test(name) || entry.annotations?.readOnlyHint===true) return {action:'read',phase:'discovery',effect:entry.annotations?.readOnlyHint===true?'read':'unknown'};
   return {action:'unknown',phase:'implementation',effect:'unknown'};
 }
 function currentPhase(active, given) {
@@ -177,11 +182,124 @@ function requestedDelivery(assessment, entry) {
     && !/检查|查看|验证|测试|审查|计划|方案|文档|如何|介绍|是否|check|inspect|review|plan|document|how to|status/i.test(clause));
 }
 
+// These narrow action/object bridges complement lexical matching. They only
+// supply reasons to inspect a currently registered tool; they never execute it
+// or infer permissions from a description. Evaluate independent clauses so that
+// "make slides and search for pictures" is not image-generation intent.
+const PICTURE=/(?:图片|图像|照片|插画|插图|海报|画像|漫画|图画|截图|(?:这|那)(?:张|幅)图|\b(?:images?|screenshots?|photos?|photographs?|pictures?|illustrations?|posters?|portraits?|comics?)\b|\b[\w.-]+\.(?:png|jpe?g|webp|gif|bmp)\b)/i;
+const splitIntentClauses=assessment=>list(assessment.activeClauses).flatMap(c=>c.split(/(?:并且|然后|同时|以及|并|\band then\b|\band\b)/i)).map(x=>x.trim()).filter(Boolean);
+const ARTIFACT_ACTION=/(?:修改|编辑|修复|添加|插入|更新|开发|搭建|实现|优化|维护|排版|\b(?:update|edit|fix|repair|modify|add|insert|build|develop)\b)/i;
+const ARTIFACT_TYPES=[
+  {kind:'artifact-edit:web',request:/网页|网站|前端|\b(?:website|webpage|web page|frontend)\b/i,purpose:/网页|网站|前端|\b(?:website|webpage|web pages?|frontend)\b/i},
+  {kind:'artifact-edit:design',request:/设计稿|figma|design file/i,purpose:/设计稿|figma|design file/i},
+  {kind:'artifact-edit:document',request:/文档|报告|\b(?:document|report)\b/i,purpose:/文档|报告|\b(?:document|report)\b/i},
+  {kind:'artifact-edit:slides',request:/幻灯片|演示文稿|\bpptx?\b|\b(?:slides?|presentation)\b/i,purpose:/幻灯片|演示文稿|\bpptx?\b|\b(?:slides?|presentation)\b/i},
+  {kind:'artifact-edit:spreadsheet',request:/表格|电子表格|\b(?:spreadsheet|excel)\b/i,purpose:/表格|电子表格|\b(?:spreadsheet|excel)\b/i},
+  {kind:'artifact-edit:code',request:/代码|源码|代码库|配置文件|\b(?:source code|codebase|source files?|repository)\b/i,purpose:/代码|源码|代码库|配置文件|\b(?:source code|codebase|source files?|repository)\b/i},
+];
+function semanticNeeds(assessment) {
+  const clauses=splitIntentClauses(assessment);
+  const needs=[];
+  for(const clause of clauses) {
+    const info=/^(?:(?:请|帮我|请你|麻烦|please)\s*)*(?:解释|介绍|讲解|说明|比较|举例|(?:给(?:我|出)?|提供|列举).{0,20}(?:例子|示例|实例|样例)|什么是|如何|怎么|explain\b|describe\b|(?:give|show)\b.{0,25}\bexamples?\b|what is\b|how (?:to|does|do)\b)/i.test(clause);
+    const picture=PICTURE.test(clause);
+    if(picture) {
+      const source=/(?:附件|附图|上传的|所附|\b(?:attached|attachment|uploaded)\b)/i.test(clause)?'attachment'
+        :/(?:刚发|刚才发|刚刚发|刚发送|\bjust sent\b)/i.test(clause)?'conversation-image'
+        :/(?:本地|文件|磁盘|\b(?:local|filesystem|file)\b|[a-z]:[\\/])/i.test(clause)?'local'
+          :/https?:\/\//i.test(clause)?'url':'unspecified';
+      const actualInput=source!=='unspecified'||/(?:这张|这幅|该图片|给定|提供的|\b(?:this|that|provided|supplied|existing)\b)/i.test(clause);
+      const create=/(?:生成|绘制|画出|画一|画个|制作|创作|设计(?!稿)|生成一|\b(?:generate|create|draw|make|render)\b).{0,28}(?:图片|图像|照片|插画|插图|海报|画像|漫画|图画|\b(?:image|photo|picture|illustration|poster|portrait|comic)\b)/i.test(clause);
+      const edit=/(?:修改|编辑|调整|替换|美化|抠图|去背景|更换|修复)(?:(?:一下|这张|这幅|那张|那幅|这些|该|现有的?|原有的?|已有的?|上传的|给定的|提供的|产品)){0,5}(?:图片|图像|照片|插画|插图|海报|截图|图)|(?:图片|图像|照片|插画|插图|海报|截图|(?:这|那)(?:张|幅)图)(?:(?:的(?:背景|颜色|内容|细节|风格|元素)?)|进行|做|整体)?(?:修改|编辑|调整|替换|美化|抠图|去背景|更换|修复|改成|改为|变成)/i.test(clause)
+        ||imageAction(clause,'(?:edit|modify|retouch|alter|change|replace)','(?:editing|modification|retouching)')
+        ||/(?:去除|去掉|移除|抠除|更换|删除|\b(?:remove|erase|replace)\b).{0,28}(?:背景|background).{0,35}(?:图片|图像|照片|\b(?:image|photo|photograph|picture)\b)|(?:图片|图像|照片|\b(?:image|photo|photograph|picture)\b).{0,28}(?:背景|background).{0,20}(?:去除|去掉|移除|抠除|更换|删除|\b(?:remove|erase|replace)\b)|(?:去除|去掉|移除|抠除|更换|删除|\b(?:remove|erase|replace)\b).{0,28}(?:图片|图像|照片|\b(?:image|photo|photograph|picture)\b).{0,16}(?:背景|background)/i.test(clause);
+      const read=/(?:查看|阅读|读取|观察|识别|看一下|解释|描述|分析|\b(?:view|read|inspect|examine|describe|analy[sz]e|interpret|look at)\b)/i.test(clause);
+      if(!info&&create)needs.push({kind:'image-create',clause,source});
+      if(!info&&edit)needs.push({kind:'image-edit',clause,source});
+      if(read&&!create&&!edit&&(!info||actualInput))needs.push({kind:'image-read',clause,source});
+      if(!info&&/(?:搜索|检索|查找|寻找|找|\b(?:search|find|look for)\b)/i.test(clause))needs.push({kind:'image-search',clause,source});
+    }
+    if(!info&&ARTIFACT_ACTION.test(clause))for(const item of ARTIFACT_TYPES)if(item.request.test(clause))needs.push({kind:item.kind,clause});
+    const search=/(?:联网|网上|在线|网络|网页|网站|官网|官方|internet|online|web|official|\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b)/i.test(clause)&&/(?:搜索|检索|查找|查询|核验|核实|查证|查|\b(?:search|find|verify|research|look up|check)\b)/i.test(clause);
+    const open=/(?:阅读|读取|浏览|打开|查看|访问|\b(?:read|open|browse|visit|fetch)\b).{0,45}(?:网页|网址|网站|链接|页面|https?:\/\/|\b(?:page|url|link|website)\b)/i.test(clause);
+    if(search)needs.push({kind:'web-search',clause});
+    if(open)needs.push({kind:'web-open',clause});
+  }
+  return needs;
+}
+// Descriptions can start with a namespace heading. Skip that container label,
+// but do not mine later instructions, examples or unrelated schema as purpose.
+function purposeText(description) {
+  const paragraphs=String(description||'').replace(/\r\n/g,'\n').split(/\n\s*\n/);
+  for(let paragraph of paragraphs) {
+    paragraph=paragraph.trim().replace(/^#{1,6}\s*/,'');
+    if(!paragraph||/^(?:tools?\s+in\s+(?:the\s+)?[\w.-]+\s+namespace|[\w.-]+\s+namespace|[-_=]+)\.?$/i.test(paragraph))continue;
+    if(/^(?:guidelines|examples|usage hints|exec tool declaration|```)/i.test(paragraph))break;
+    return paragraph.slice(0,700);
+  }
+  return '';
+}
+const IMAGE_OBJECT='(?:images?|photos?|photographs?|pictures?|illustrations?|posters?|portraits?|comics?)';
+const IMAGE_QUALIFIERS='(?:(?:a|an|the|of|this|that|existing|attached|uploaded|provided|supplied|local|source|reference|input|original|new|standalone|raster|bitmap|digital|product|selected|user-provided)\\s+){0,6}';
+function imageAction(purpose,verb,nounAction) {
+  // Bind the operation to its object, not two words in unrelated sentences.
+  return new RegExp(`\\b${verb}\\b\\s+${IMAGE_QUALIFIERS}${IMAGE_OBJECT}\\b|\\b${IMAGE_OBJECT}\\s+${nounAction}\\b`,'i').test(purpose);
+}
+function semanticMatches(entry,needs) {
+  if(!['tool','plugin','mcp'].includes(entry.kind))return [];
+  // For generic multi-operation web tools inspect named operation examples too.
+  const purpose=purposeText(entry.description);
+  const full=String(entry.description||'').slice(0,1600);
+  const make=imageAction(purpose,'(?:generat(?:e|es|ed|ing)|creat(?:e|es|ed|ing)|draw(?:s|n|ing)?|render(?:s|ed|ing)?)','(?:generation|creation|rendering)')||/(?:生成|创建|绘制|渲染)(?:一张|一个|新的|新|指定的|目标)?(?:图片|图像|照片|插画)/.test(purpose);
+  const edit=imageAction(purpose,'(?:edit(?:s|ed|ing)?|modif(?:y|ies|ied|ying)|retouch(?:es|ed|ing)?|alter(?:s|ed|ing)?|restyl(?:e|es|ed|ing))','(?:editing|modification|retouching)')
+    ||/\b(?:remove|erase|replace)\s+(?:the\s+)?backgrounds?\s+(?:from|of)\s+(?:(?:the|a|an|existing|supplied|provided)\s+)*(?:images?|photos?|photographs?|pictures?)\b/i.test(purpose)
+    ||/(?:编辑|修改|修饰|调整)(?:已有的?|现有的?|上传的|指定的)?(?:图片|图像|照片|插画)|(?:图片|图像|照片|插画)(?:进行|的)?(?:编辑|修改|修饰|调整)/.test(purpose);
+  const read=imageAction(purpose,'(?:view(?:s|ed|ing)?|read(?:s|ing)?|inspect(?:s|ed|ing)?|examine(?:s|d)?|analy[sz](?:e|es|ed|ing)|recogniz(?:e|es|ed|ing))','(?:viewing|inspection|analysis)')||/(?:查看|读取|识别|分析)(?:本地的?|已有的?|指定的|上传的)?(?:图片|图像|照片)/.test(purpose);
+  const searchImages=imageAction(purpose,'(?:search(?:es|ed|ing)?|find(?:s|ing)?)','(?:search|retrieval)')||/(?:搜索|检索|查找)(?:网络|在线|网页)?(?:图片|图像|照片|插画)/.test(purpose);
+  const web=/\b(?:internet|web|online|browser|website)\b/i.test(purpose);
+  const artifactAction=/(?:修改|编辑|修复|添加|插入|更新|开发|搭建|实现|优化|维护|排版|\b(?:updat(?:e|es|ed|ing)|edit(?:s|ed|ing)?|fix(?:es|ed|ing)?|repair(?:s|ed|ing)?|modif(?:y|ies|ied|ying)|add(?:s|ed|ing)?|insert(?:s|ed|ing)?|build(?:s|ing)?|develop(?:s|ed|ing)?)\b)/i.exec(purpose);
+  return needs.filter(need=>
+    (need.kind==='image-create'&&make)||
+    (need.kind==='image-edit'&&edit)||
+    (need.kind==='image-read'&&read)||
+    (need.kind==='image-search'&&(searchImages||(web&&/\bimage_query\b/i.test(full))))||
+    (need.kind.startsWith('artifact-edit:')&&artifactAction&&ARTIFACT_TYPES.some(item=>{
+      if(item.kind!==need.kind)return false;
+      const target=item.purpose.exec(purpose);if(!target||target.index<artifactAction.index)return false;
+      const between=purpose.slice(artifactAction.index+artifactAction[0].length,target.index);
+      return between.length<80&&!PICTURE.test(between);
+    }))||
+    (need.kind==='web-search'&&web&&/(?:\bsearch\b|search_query)/i.test(full))||
+    (need.kind==='web-open'&&web&&/(?:\bopen\b|\b(?:read|browse|fetch)\b)/i.test(full)));
+}
+
+function inputEvidence(assessment,semantics) {
+  // Only the original current instruction can provide an exact URL. Mask
+  // quoted/example material and omit negated segments; never construct one.
+  const raw=typeof assessment.rawText==='string'?requestSegments(assessment.rawText,{preserveNames:false}).text:'';
+  const urlPattern=/https?:\/\/[^\s<>"，。！？、；）)]+/gi;
+  const masked=raw.replace(urlPattern,x=>'x'.repeat(x.length));
+  const allowed=index=>{
+    let start=index,end=index;
+    while(start>0&&!/[。！？!?；;，,\n]/.test(masked[start-1]))start--;
+    while(end<masked.length&&!/[。！？!?；;，,\n]/.test(masked[end]))end++;
+    return !negativeDirective.test(masked.slice(start,end));
+  };
+  const providedUrls=unique([...raw.matchAll(urlPattern)].filter(x=>allowed(x.index)).map(x=>x[0]));
+  const webNeed=semantics.some(x=>x.kind==='web-search'||x.kind==='web-open'||x.kind==='image-search');
+  const domainText=raw||String(assessment.activeText||'');
+  const providedDomains=webNeed?unique([...domainText.matchAll(/(?<![\w@/.-])(?:[a-z0-9-]+\.)+[a-z]{2,}(?![\w-])/gi)].filter(x=>!raw||allowed(x.index)).map(x=>x[0]).filter(x=>!/\.(?:png|jpe?g|webp|gif|bmp|pdf)$/i.test(x))):[];
+  return {sources:unique(semantics.map(x=>x.source)),providedUrls,providedDomains};
+}
+
 /** Produces host execution choices, never calls business tools itself. */
 function adviseCapabilitiesBase(assessment, options = {}) {
   const inventory = options.capabilityIndex || discoverCapabilities(options);
   const active = assessment.activeText || '';
-  const phase = currentPhase(active, options.phase || options.invocationContext?.phase);
+  const needs=semanticNeeds(assessment);
+  const givenPhase=options.phase||options.invocationContext?.phase;
+  const phase = (!givenPhase||givenPhase==='auto')&&needs.some(n=>n.kind==='image-create'||n.kind==='image-edit'||n.kind.startsWith('artifact-edit:'))?'implementation':currentPhase(active,givenPhase);
+  const pureImageTask=needs.length>0&&needs.every(n=>n.kind.startsWith('image-'));
   const queryTerms = new Set(terms(active));
   const normalizedActive=label(active);
   const providerKey=value=>label(String(value||'').split('@')[0]);
@@ -191,10 +309,16 @@ function adviseCapabilitiesBase(assessment, options = {}) {
   const cards = [];
   for (const entry of inventory.capabilities) {
     if (!entry.enabled) continue;
+    const runtimeRecord=entry.kind==='tool'?(options.runtimeTools||[]).find(t=>t.name===entry.name):null;
+    if(runtimeRecord?.available===false)continue;
+    const callable=runtimeRecord?true:entry.callable;
+    const declaredAvailable=typeof runtimeRecord?.available==='boolean'?runtimeRecord.available:entry.declaredAvailable??null;
     if (entry.kind==='mcp' && entry.tools.length) continue; // Tools provide the actionable granularity.
-    if(entry.kind==='tool'&&namedProviders.size&&!namedProviders.has(providerKey(entry.plugin))&&!namedProviders.has(providerKey(entry.server))&&![...namedProviders].some(p=>(`-${label(entry.name)}-`).includes(`-${p}-`)))continue;
+    const semantics=semanticMatches(entry,needs),semantic=semantics[0];
+    const independentNeed=semantics.some(match=>![...namedProviders].some(p=>(`-${label(match.clause)}-`).includes(`-${p}-`)));
+    if(entry.kind==='tool'&&namedProviders.size&&!namedProviders.has(providerKey(entry.plugin))&&!namedProviders.has(providerKey(entry.server))&&![...namedProviders].some(p=>(`-${label(entry.name)}-`).includes(`-${p}-`))&&!independentNeed)continue;
     // Purpose text carries more signal than cross-tool instructions and examples.
-    const purpose=entry.description.split(/\n\s*\n/)[0].slice(0,700);
+    const purpose=purposeText(entry.description);
     if(/^Capture\b/i.test(purpose)&&!/捕获|截图|导入|capture|screenshot|import/i.test(active))continue;
     const haystack = `${entry.name} ${purpose}`;
     const shared = terms(haystack).filter(x=>queryTerms.has(x));
@@ -203,8 +327,22 @@ function adviseCapabilitiesBase(assessment, options = {}) {
       const escaped=String(x).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
       return new RegExp(`(?:\\$|使用\\s*|调用\\s*|用\\s*|use\\s+|invoke\\s+)${escaped}(?=$|[^a-z0-9_-])`,'i').test(active);
     });
+    const localImageOnly=/\blocal image file\b|\bimages? already available on disk\b/i.test(purpose);
+    if(!explicit&&localImageOnly&&semantics.length&&semantics.every(x=>x.kind==='image-read'&&['attachment','conversation-image','url'].includes(x.source)))continue;
+    // Image production is not image inspection or an explanation of how
+    // generation works. Explicitly named tools still go through normal gates.
+    const imageProducer=imageAction(purpose,'(?:generat(?:e|es|ed|ing)|creat(?:e|es|ed|ing)|edit(?:s|ed|ing)?|modif(?:y|ies|ied|ying))','(?:generation|creation|editing|modification)');
+    if(!explicit&&imageProducer&&!semantic&& !needs.some(n=>n.kind==='image-create'||n.kind==='image-edit'))continue;
+    // A picture mentioned as an upload, page embed or editing example does not
+    // make a tool a photo editor. Keep an unrelated independently matched task.
+    if(pureImageTask&&!explicit&&!semantic) {
+      const independentlyMatched=splitIntentClauses(assessment).filter(c=>!PICTURE.test(c)).some(c=>{
+        const other=new Set(terms(c));return shared.filter(t=>other.has(t)).length>=2;
+      });
+      if(!independentlyMatched)continue;
+    }
     // One generic domain match is insufficient to add tools to an otherwise native task.
-    if (!explicit && shared.length<2) continue;
+    if (!explicit && shared.length<2 && !semantic) continue;
     const brandTerms=new Set(terms(`${entry.plugin||''} ${entry.server||''}`));
     const nonBrand=shared.filter(x=>!brandTerms.has(x));
     if(entry.kind==='tool'&&!explicit&&entry.plugin&&nonBrand.length===0)continue;
@@ -212,8 +350,12 @@ function adviseCapabilitiesBase(assessment, options = {}) {
     const exclusions=[...entry.description.matchAll(/(?:Do not use (?:this tool )?for|not (?:intended|suitable) for)\s+([^.!\n]+)/gi)].map(x=>x[1]);
     if(!explicit&&exclusions.some(x=>terms(x).some(t=>queryTerms.has(t)&&!brandTerms.has(t))))continue;
     if (/dynamic.skill.router/.test(norm(`${entry.name} ${entry.server}`)) && !/路由|router/i.test(active)) continue;
-    const op = entry.kind==='tool' ? operation(entry) : {action:'discover',phase,effect:'unknown'};
-    let score = shared.length*4+(explicit?24:0);
+    let op = entry.kind==='tool' ? operation(entry) : {action:'discover',phase,effect:'unknown'};
+    if(entry.kind==='tool'&&semantic&&op.effect!=='high-impact'&&op.effect!=='external-write') {
+      if(semantic.kind==='image-create'||semantic.kind==='image-edit'||semantic.kind.startsWith('artifact-edit:'))op={action:'change',phase:'implementation',effect:'write-or-unknown'};
+      else if(op.action!=='change'||/^run$/i.test(entry.name.split('__').at(-1)))op={action:'read',phase:'discovery',effect:entry.annotations?.readOnlyHint===true?'read':'unknown'};
+    }
+    let score = shared.length*4+(explicit?24:0)+(semantic?18:0);
     const nameTerms=terms(entry.name.split('__').at(-1));
     score+=nameTerms.filter(x=>queryTerms.has(x)&&!brandTerms.has(x)).length*8;
     if(op.action==='read'&&wantsRead)score+=10;
@@ -221,30 +363,45 @@ function adviseCapabilitiesBase(assessment, options = {}) {
     if(wantsSearch&&/\blist\b/.test(entry.name.replace(/_/g,' ')))score+=8;
     // Specialized child resources must be asked for; a brand match is not enough.
     const specialist=['revision','comment','shader','motion','animation','row','range','toolbar','generative','deck','video'];
-    if(!explicit&&nameTerms.some(t=>specialist.includes(t)&&!queryTerms.has(t)))continue;
+    if(!explicit&&!semantic&&nameTerms.some(t=>specialist.includes(t)&&!queryTerms.has(t)))continue;
     const needsDelivery = op.phase==='delivery';
     const deliveryRequested = phase==='delivery' && requestedDelivery(assessment,entry);
-    let decision = entry.callable && entry.kind==='tool' ? 'use-now' : 'discover-first';
+    let decision = callable===true && entry.kind==='tool' ? 'use-now' : 'discover-first';
     const gates = ['confirm-task-benefit','inspect-exact-schema-and-inputs','respect-current-user-authorization'];
+    if(semantics.some(x=>x.kind==='image-edit'||x.kind==='image-read'))gates.push('verify-required-image-input');
+    if(semantics.some(x=>x.kind==='image-read')&&localImageOnly)gates.push('verify-local-image-path');
+    if(semantics.some(x=>x.kind==='image-edit')&&/\bupload\b.{0,120}\b(?:attachment|image|photo|reference)\b|\b(?:attachment|image|photo|reference)\b.{0,120}\bupload\b/i.test(entry.description))gates.push('verify-external-input-transfer-and-access');
     if(/must load|read .{0,160}SKILL\.md|skill.*before|before.*skill/i.test(entry.description))gates.push('read-required-skill-before-invocation');
-    if (assessment.readOnly && op.effect!=='read') { decision='skip'; gates.push('read-only-scope'); }
+    if (assessment.readOnly && op.effect!=='read') { decision=op.effect==='unknown'?'defer':'skip'; gates.push(op.effect==='unknown'?'read-effects-unverified':'read-only-scope'); }
     else if (needsDelivery && !deliveryRequested) {decision='defer';gates.push('delivery-not-requested');score-=12;}
     else if (entry.kind==='tool' && op.phase!=='discovery' && op.phase!==phase) {decision='defer';gates.push('different-task-phase');score-=8;}
     else if (entry.kind==='tool' && op.effect!=='read') {decision='check-scope';gates.push('verify-effects-and-authorized-scope');}
-    if (!entry.callable) {decision=decision==='skip'?'skip':'discover-first';gates.push('runtime-callability-unverified');}
+    if (callable!==true) {if(!['skip','defer'].includes(decision))decision='discover-first';gates.push('runtime-callability-unverified');}
     if (entry.kind==='plugin') {decision='discover-first';gates.push('select-specific-tool-or-read-relevant-skill');}
     if (op.effect==='high-impact' || op.effect==='external-write') gates.push('check-destination-and-current-action-authorization');
     cards.push({id:entry.id,kind:entry.kind,name:entry.name,plugin:entry.plugin || null,server:entry.server || null,
       description:entry.description.slice(0,240),score,explicit,matchedTerms:shared.slice(0,6),
-      availability:{discovered:true,enabled:entry.enabled,callable:entry.callable,evidence:entry.evidence},
-      decision,phase:op.phase,when:decision==='defer'?'仅到相应阶段且用户目标需要时再评估':decision==='discover-first'?'先按需发现工具或读取相关技能，确认当前会话可用':`当前 ${phase} 阶段，且缺少其能提供的结果时`,
+      ...(semantic?{intentMatches:unique(semantics.map(match=>match.kind)),purposeEvidence:{source:'tool-description',text:purpose.slice(0,240)},inputEvidence:inputEvidence(assessment,semantics)}:{}),
+      availability:{discovered:true,enabled:entry.enabled,callable,evidence:runtimeRecord?'runtime-tool':entry.evidence,...(entry.kind==='tool'?{declaredAvailable,authentication:'unknown',businessOutcome:'unknown'}:{})},
+      decision,phase:op.phase,when:decision==='defer'?(gates.includes('read-effects-unverified')?'当前可核对精确 schema 和只读效果，确认符合范围后再用':'仅到相应阶段且用户目标需要时再评估'):decision==='discover-first'?'先按需发现工具或读取相关技能，确认当前会话可用':`当前 ${phase} 阶段，且缺少其能提供的结果时`,
       expectedBenefit:OUTCOME[op.phase] || OUTCOME[phase],effect:op.effect,gates,
       invocation:{tool:entry.kind==='tool'?entry.name:null,argumentPolicy:'Use the host tool schema and actual task inputs; do not invent parameters.',executor:'host-agent',automaticallyExecuted:false},
-      reason:explicit?'用户在当前任务中点名此能力':`任务与能力共有具体信号：${shared.slice(0,4).join('、')}`});
+      reason:explicit?'用户在当前任务中点名此能力':semantic?`当前任务与工具用途匹配：${semantic.kind}；仍需核对参数、效果和授权`:`任务与能力共有具体信号：${shared.slice(0,4).join('、')}`});
   }
   const order = {'use-now':0,'check-scope':0,'discover-first':1,'defer':2,'skip':3};
   cards.sort((a,b)=>order[a.decision]-order[b.decision] || b.score-a.score || a.id.localeCompare(b.id));
-  const candidates = cards.slice(0,Math.min(10, Math.max(1,options.capabilityLimit || 5)));
+  const limit=Math.min(10,Math.max(1,options.capabilityLimit||5));
+  // Preserve explicitly named tools, then reserve a slot for each distinct
+  // evidenced task need before filling the remaining score-ordered slots.
+  const chosen=cards.filter(card=>card.explicit),chosenIds=new Set(chosen.map(card=>card.id));
+  for(const need of needs) {
+    if(chosen.length>=Math.max(limit,cards.filter(card=>card.explicit).length))break;
+    if(chosen.some(card=>card.intentMatches?.includes(need.kind)))continue;
+    const match=cards.find(card=>!chosenIds.has(card.id)&&card.intentMatches?.includes(need.kind)&&card.decision!=='skip');
+    if(match){chosen.push(match);chosenIds.add(match.id);}
+  }
+  for(const card of cards){if(chosen.length>=Math.max(limit,cards.filter(item=>item.explicit).length))break;if(!chosenIds.has(card.id)){chosen.push(card);chosenIds.add(card.id);}}
+  const candidates=cards.filter(card=>chosenIds.has(card.id));
   return {revision:inventory.revision,coverage:inventory.coverage,errors:inventory.errors,phase,candidates,
     executionPolicy:{executor:'host-agent',advisoryOnly:true,scanExecutesTools:false,
       recheckAt:['initial-task','phase-change','capability-gap','tool-unavailable'],
@@ -256,7 +413,12 @@ export function adviseCapabilities(assessment,options={}) {
   validateHostOptions(options);
   const base=adviseCapabilitiesBase(assessment,options);
   const result=options.taskContext?.capabilityRequests?{...base,capabilityConsultations:exactToolConsultations(assessment.rawText??assessment.activeText,assessment,options)}:base;
-  if(!options.invocationContext&&options.recoveryContext?.networkAllowed!==false)return result;
   const constraints=invocationConstraints(assessment,options);
-  return {...result,taskConstraints:constraints,candidates:result.candidates.map(card=>constrainCapability(card,constraints,(options.runtimeTools||[]).find(t=>t.name===card.name)||{}))};
+  if(!options.invocationContext&&!constraints.readOnly&&!constraints.networkForbidden&&!constraints.sourceScope&&!constraints.preserveInputs)return result;
+  return {...result,taskConstraints:constraints,candidates:result.candidates.map(card=>{
+    const tool=(options.runtimeTools||[]).find(t=>t.name===card.name)||(options.capabilityIndex?.capabilities||[]).find(t=>t.name===card.name)||{};
+    const restricted=constrainCapability(card,constraints,tool);
+    return restricted.decision==='defer'&&restricted.gates.includes('read-effects-unverified')
+      ?{...restricted,when:'当前可核对精确 schema 和只读效果，确认符合范围后再用'}:restricted;
+  })};
 }

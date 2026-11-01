@@ -49,3 +49,11 @@ report_outcome 请复用任务 routeId。缺少任务标识的记录只供审计
 `methodCandidates` 为 0–2 张可拒绝咨询卡；`taskMethods=false` 关闭，maxCards=0 也不选卡。无相关缺口时允许空，已有 fast 不读取目录。qualityProfile 的 economy/balanced/quality 只调整建议阅读预算和核验深度，默认旧预算不变，必要验收与安全约束不省略。
 
 反馈 `report_outcome` 可附真实 `modelId`、`observedAt` 与 `revoked`。后续路由用真实 `currentModel`；直接校准使用 `context.modelId` 与当前 `contentHashes`。只有已采用、有验证/用户证据、同模型和当前内容hash、90天内的独立观察参与有界校准。无日期/模型/当前hash、未来、过期、撤销和冲突仅保留审计，不是模型训练；测试中的固定时间与模型标识只是可复现fixture，不能冒充生产运行事实。
+
+## 4.3 请求证据与能力建议
+
+`requestContext.rawQuery` 仍是用户原文。出现引用、代码或附件上下文时，`sourceSegments` 可用 UTF-16 的 `start/end` 指向原文片段；`boundary: unclosed` 表示无法可靠识别结束位置，宿主应结合原文判断，不能将后续材料当成授权。识别结果是辅助信息，并非完整语言理解或安全边界的替代。
+
+`taskConstraints` 分开表示全任务 `readOnly`、`networkForbidden`、`sourceScope: provided-only` / `specified-site-only` 与 `preserveInputs`。仅用所给资料不自动禁止读取用户提供的 URL；只用指定网站时在该站范围内查证，不凭机构名称猜造域名；保护输入不自动禁止创建用户要求的单独输出。当前范围、结构化宿主限制与用户指令都只能收紧，模型仍需结合原始任务和具体工具检查权限与输入。对未确认副作用的工具不得据名称猜测可安全写入、联网或发送。
+
+工具候选可能包含 `intentMatches` 与 `inputEvidence`，表示当前动作与工具自述用途的可解释匹配、用户明确给出的输入，不代表已调用、已登录或结果可用。复合任务优先覆盖不同缺口，仍可选择跳过；对于不确定的动作、阶段或效果，应读取精确工具说明并核实范围。当前 `runtimeTools` 注册表证明入口可见；仅由名称清单推断时可用性保持未知，`declaredAvailable` 保留宿主明确声明，认证与业务结果分别为未知。不得用这些候选信息推断认证或实际任务成功。

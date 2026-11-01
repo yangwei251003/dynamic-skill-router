@@ -1,4 +1,4 @@
-import {constrainRecovery} from './invocation-constraints.mjs';
+import {constrainRecovery,invocationConstraints} from './invocation-constraints.mjs';
 const list=x=>Array.isArray(x)?x:[];
 const clean=x=>String(x||'').trim();
 
@@ -23,7 +23,7 @@ function planRecoveryBase(assessment, options = {}) {
   const triggered=rejected||low||blocked||repeated;
   if(!triggered)return {triggered:false,externalResearchRequired:false,reason:'native-sufficient-or-no-blocker',executor:'host-agent',automaticallyExecuted:false};
   const mandatoryResearch=rejected||low||repeated||(blocked&&state.confidence!=='high');
-  const networkForbidden=state.networkAllowed===false||/不要联网|禁止联网|不得联网|离线完成|不允许联网|no network|offline only/i.test(assessment.rawText||assessment.activeText||'');
+  const networkForbidden=invocationConstraints(assessment,options).networkForbidden;
   const need=searchPhrase(state.capabilityNeed || options.taskContext?.domain || '');
   const names=[...list(options.runtimeTools).filter(x=>x?.available!==false).map(x=>x.name),...list(options.runtimeCapabilities?.tools)];
   const find=pattern=>names.find(x=>typeof x==='string'&&pattern.test(x))||null;

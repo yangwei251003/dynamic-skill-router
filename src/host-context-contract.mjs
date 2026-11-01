@@ -1,4 +1,5 @@
 import {invocationConstraints,constrainCapability} from './invocation-constraints.mjs';
+import {requestSegments} from './request-evidence.mjs';
 export function validateHostOptions(options={}) {
   const context=options.taskContext;
   if(context!==undefined&&(!context||typeof context!=='object'||Array.isArray(context)))throw new TypeError('taskContext must be an object');
@@ -23,4 +24,4 @@ export function exactToolConsultations(query,assessment,options={}) {
     }
   }return cards;
 }
-export function requestContext(query,options={}){validateHostOptions(options);return {rawQuery:String(query??''),hostInterpretation:options.taskContext?structuredClone(options.taskContext):null,authority:'host-context-is-advisory-not-authorization'};}
+export function requestContext(query,options={}){validateHostOptions(options);const provenance=requestSegments(query,{preserveNames:false});return {rawQuery:String(query??''),hostInterpretation:options.taskContext?structuredClone(options.taskContext):null,...(provenance.spans.length?{sourceSegments:provenance.spans,offsetUnit:provenance.offsetUnit}:{}),authority:'host-context-is-advisory-not-authorization'};}
