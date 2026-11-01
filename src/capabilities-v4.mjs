@@ -233,7 +233,7 @@ function semanticNeeds(assessment) {
     // Keep explicit negative web actions from becoming affirmative needs, even
     // when the higher-level clause filter retained a short “不打开” phrase.
     const webClause=clause.replace(/(?:不要|不得|禁止|不能|请勿|不必|无需|无须|不需要|别|不)\s*(?:再|主动|直接|自行|实际|擅自|去)?\s*(?:打开|访问|读取|阅读|浏览|查看|读出|搜索|检索|查找|查询|核验|核实|查证)/g,'');
-    const search=/(?:联网|网上|在线|网络|网页|网站|官网|官方|internet|online|web|official|\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b)/i.test(webClause)&&/(?:搜索|检索|查找|查询|核验|核实|查证|查|\b(?:search|find|verify|research|look up|check)\b)/i.test(webClause);
+    const search=/(?:联网|上网|网上|在线|网络|网页|网站|官网|官方|internet|online|web|official|\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b)/i.test(webClause)&&/(?:搜索|检索|查找|查询|核验|核实|查证|查|\b(?:search|find|verify|research|look up|check)\b)/i.test(webClause);
     const open=/(?:阅读|读取|浏览|打开|查看|访问|\b(?:read|open|browse|visit|fetch)\b).{0,45}(?:网页|网址|网站|链接|页面|https?:\/\/|\b(?:page|url|link|website)\b)/i.test(webClause)
       ||(!info&&/(?:网页|网址|网站|链接|页面|\b(?:page|url|link|website)\b|https?:\/\/[^\s<>"，。！？、；）)]+).{0,45}(?:阅读|读取|读出|浏览|打开|查看|访问|\b(?:read|open|browse|visit|fetch)\b)/i.test(webClause));
     if(search)needs.push({kind:'web-search',clause});
@@ -306,6 +306,21 @@ function inputEvidence(assessment,semantics) {
   return {sources:unique(semantics.map(x=>x.source)),providedUrls,providedDomains};
 }
 
+// A runtime namespace is a weak identity clue, not an availability or
+// authorization claim. Aggregator namespaces may encode the service in the
+// operation name instead (e.g. provider_resource_search).
+function toolProvider(entry) {
+  if(entry.kind!=='tool')return '';
+  const parts=String(entry.name||'').split('__');
+  const namespace=entry.server||(parts[0]==='mcp'?parts[1]:parts.length>1?parts[0]:'');
+  const normalized=label(namespace);
+  const generic=new Set(['','mcp','apps','codex-apps','mcpapps','functions','tools','tool','web','browser','image-gen','exec']);
+  if(!generic.has(normalized))return normalized;
+  const leaf=parts.at(-1)||'';
+  const prefix=leaf.replace(/_(?:search|find|list|get|read|fetch|lookup|open)(?:_(?:files?|documents?|items?))?$/i,'');
+  return prefix!==leaf&&prefix.includes('_')?label(prefix):'';
+}
+
 /** Produces host execution choices, never calls business tools itself. */
 function adviseCapabilitiesBase(assessment, options = {}) {
   const inventory = options.capabilityIndex || discoverCapabilities(options);
@@ -318,6 +333,19 @@ function adviseCapabilitiesBase(assessment, options = {}) {
   const normalizedActive=label(active);
   const providerKey=value=>label(String(value||'').split('@')[0]);
   const namedProviders=new Set(inventory.capabilities.filter(e=>e.kind==='plugin'||e.kind==='mcp').flatMap(e=>[e.name,e.displayName,e.plugin]).filter(x=>x&&providerKey(x).length>2&&(`-${normalizedActive}-`).includes(`-${providerKey(x)}-`)).map(providerKey));
+  const runtimeProviders=new Set(inventory.capabilities.map(toolProvider).filter(p=>p&&(`-${normalizedActive}-`).includes(`-${p}-`)));
+  const broadSourceScope=/(?:等(?:等)?|所有|各个|各类|多个|不同|任意|各种|其他|其它).{0,15}(?:网盘|云盘|云空间|云端|云服务|存储|来源|服务|平台|\b(?:drives?|cloud|storage|providers?)\b)|(?:和|与|及|以及|、|或|\band\b|\bor\b).{1,24}(?:网盘|云盘|云空间|云端|云服务|存储|分别|各自|\b(?:drives?|cloud|storage)\b)/i.test(active)
+    ||/(?:和|与|及|以及|、|或)\s*[\p{Script=Han}A-Za-z]{2,16}(?:文档|表格|知识库|群聊)/iu.test(active);
+  const crossSourceTransfer=/(?:同步|转存|迁移|拷贝|复制|\b(?:sync|transfer|migrate|copy)\b)/i.test(active)
+    ||/(?:上传|导入|导出).{0,20}(?:到|至)(?!本地|电脑|当前目录|当前文件夹)/i.test(active);
+  const hasOtherSourceWork=broadSourceScope||crossSourceTransfer
+    ||splitIntentClauses(assessment).some(clause=>{
+    const current=label(clause);
+    if([...runtimeProviders].some(p=>(`-${current}-`).includes(`-${p}-`)))return false;
+    if(needs.some(n=>n.clause===clause&&(n.kind.startsWith('image-')||n.kind.startsWith('web-'))))return false;
+    return /搜索|检索|查找|查询|访问|打开|同步|转存|上传|\b(?:search|find|lookup|open|sync|transfer|upload)\b/i.test(clause)
+      ||/(?:使用|通过|借助|用|在).{1,20}(?:查看|读取|浏览)/i.test(clause);
+  });
   const wantsSearch=/搜索|检索|查找|\bsearch\b|\bfind\b/i.test(active);
   const wantsRead=wantsSearch||/读取|查看|检查|获取|\bread\b|\bget\b|\binspect\b/i.test(active);
   const cards = [];
@@ -341,6 +369,13 @@ function adviseCapabilitiesBase(assessment, options = {}) {
       const escaped=String(x).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
       return new RegExp(`(?:\\$|使用\\s*|调用\\s*|用\\s*|use\\s+|invoke\\s+)${escaped}(?=$|[^a-z0-9_-])`,'i').test(active);
     });
+    const provider=toolProvider(entry), providerParts=provider.split('-');
+    const providerPrefix=providerParts.slice(0,-1).join('-');
+    // A distinctive partial service name ("Feishu" for "Feishu Drive")
+    // prevents suppressing that service, but does not establish availability.
+    const partialProviderMention=providerParts.length>1&&providerPrefix.length>=4&&(`-${normalizedActive}-`).includes(`-${providerPrefix}-`);
+    const competingProvider=!explicit&&!hasOtherSourceWork&&!partialProviderMention&&providerParts.length>1&&!runtimeProviders.has(provider)
+      && [...runtimeProviders].some(p=>{const parts=p.split('-');return parts.length>1&&parts.at(-1)===providerParts.at(-1)&&parts.at(-1).length>=4;});
     const localImageOnly=/\blocal image file\b|\bimages? already available on disk\b/i.test(purpose);
     if(!explicit&&localImageOnly&&semantics.length&&semantics.every(x=>x.kind==='image-read'&&['attachment','conversation-image','url'].includes(x.source)))continue;
     // Image production is not image inspection or an explanation of how
@@ -392,12 +427,13 @@ function adviseCapabilitiesBase(assessment, options = {}) {
     else if (entry.kind==='tool' && op.effect!=='read') {decision='check-scope';gates.push('verify-effects-and-authorized-scope');}
     if (callable!==true) {if(!['skip','defer'].includes(decision))decision='discover-first';gates.push('runtime-callability-unverified');}
     if (entry.kind==='plugin') {decision='discover-first';gates.push('select-specific-tool-or-read-relevant-skill');}
+    if (competingProvider && decision!=='skip') {decision='defer';gates.push('different-specified-provider');}
     if (op.effect==='high-impact' || op.effect==='external-write') gates.push('check-destination-and-current-action-authorization');
     cards.push({id:entry.id,kind:entry.kind,name:entry.name,plugin:entry.plugin || null,server:entry.server || null,
       description:entry.description.slice(0,240),score,explicit,matchedTerms:shared.slice(0,6),
       ...(semantic?{intentMatches:unique(semantics.map(match=>match.kind)),purposeEvidence:{source:'tool-description',text:purpose.slice(0,240)},inputEvidence:inputEvidence(assessment,semantics)}:{}),
       availability:{discovered:true,enabled:entry.enabled,callable,evidence:runtimeRecord?'runtime-tool':entry.evidence,...(entry.kind==='tool'?{declaredAvailable,authentication:'unknown',businessOutcome:'unknown'}:{})},
-      decision,phase:op.phase,when:decision==='defer'?(gates.includes('read-effects-unverified')?'当前可核对精确 schema 和只读效果，确认符合范围后再用':'仅到相应阶段且用户目标需要时再评估'):decision==='discover-first'?'先按需发现工具或读取相关技能，确认当前会话可用':`当前 ${phase} 阶段，且缺少其能提供的结果时`,
+      decision,phase:op.phase,when:decision==='defer'?(gates.includes('different-specified-provider')?'当前请求指定其他同类来源；确有该来源需求时再核对':gates.includes('read-effects-unverified')?'当前可核对精确 schema 和只读效果，确认符合范围后再用':'仅到相应阶段且用户目标需要时再评估'):decision==='discover-first'?'先按需发现工具或读取相关技能，确认当前会话可用':`当前 ${phase} 阶段，且缺少其能提供的结果时`,
       expectedBenefit:OUTCOME[op.phase] || OUTCOME[phase],effect:op.effect,gates,
       invocation:{tool:entry.kind==='tool'?entry.name:null,argumentPolicy:'Use the host tool schema and actual task inputs; do not invent parameters.',executor:'host-agent',automaticallyExecuted:false},
       reason:explicit?'用户在当前任务中点名此能力':semantic?`当前任务与工具用途匹配：${semantic.kind}；仍需核对参数、效果和授权`:`任务与能力共有具体信号：${shared.slice(0,4).join('、')}`});

@@ -63,7 +63,8 @@ export function useFastPath(assessment, options, recovery) {
   if(assessment.complexDevelopment||options.taskContext?.complexity==='high')return false;
   if(options.nativeSufficient===true||options.routingMode==='fast')return true;
   return assessment.selfContainedFunction===true||/^(?:你好|您好|谢谢|早上好|hello|hi|thanks)[!！。.\s]*$/i.test(active)
-    ||/^(?:计算|算一下|算算|what is)?\s*[\d\s+\-*/×÷().=]+[?？]?$/i.test(active);
+    ||/^(?:计算|算一下|算算|what is)?\s*[\d\s+\-*/×÷().=]+[?？]?$/i.test(active)
+    ||/^(?:计算|算一下|算算)?\s*[\d\s+\-*/×÷().=]+(?:等于多少|等于几|是多少|结果是多少)[?？。\s]*$/i.test(active);
 }
 
 export function planRecovery(assessment,options={}) { return constrainRecovery(planRecoveryBase(assessment,options),assessment,options); }

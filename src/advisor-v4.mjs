@@ -14,6 +14,11 @@ const list = (value) => Array.isArray(value) ? value : [];
 const unique = (values) => [...new Set(values.filter(Boolean))];
 const STOP = new Set('a an and are as at be because before but by can code condition data do evidence explain for from full give has have how i in into is it its list load make making my name new no not of on or our out over please point real request review run should skill skills the their them there these this to use user users using version versions what when where which with work write you your app apps system systems task tasks need needs add claim'.split(' '));
 const STEM = new Map(Object.entries({diagnostic:'debug',diagnostics:'debug',diagnose:'debug',diagnosing:'debug',troubleshoot:'debug',troubleshooting:'debug',failure:'debug',incident:'debug',outage:'debug',slow:'performance',slowness:'performance',migrations:'migration',migrate:'migration',migrating:'migration',schemas:'schema',rollbacks:'rollback',deployments:'deployment',deploy:'deployment',features:'feature',requirements:'requirement',prioritize:'priority',prioritization:'priority',concurrent:'concurrency',atomicity:'atomic',transactions:'transaction'}));
+function softwareDiagnosticEvidence(text) {
+  const software = /(?:代码|代码库|程序|软件|接口|服务器|数据库|后端|服务端|\b(?:node(?:\.js)?|javascript|typescript|python|java|sql|api|server)\b)/i.test(text);
+  const action = /(?:故障排查|排查故障|调试|诊断|排查.{0,12}(?:异常|故障|错误|问题|原因|根因)|找出.{0,12}(?:原因|根因)|定位.{0,12}(?:问题|原因|根因|故障|错误|缺陷))/i.exec(text);
+  return software && action ? action[0] : null;
+}
 function token(value) {
   const normalized = norm(value).replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
   if (!normalized || STOP.has(normalized)) return '';
@@ -33,8 +38,12 @@ const words = (value) => {
 // Character n-grams are useful for recall but can cross Chinese word
 // boundaries. Only use independent, word-aligned signals as standalone
 // support for an unrequested skill. No new score boost is introduced.
-const genericHan = new Set('开始 结束 使用 制作 创建 生成 编辑 修改 执行 运行 处理 查询 查看 检查 审查 核对 研究 进行 支持 需要 可以 完成 用户 当前 之后 之前 期间 提供 展示 输出 输入 结果 内容 资料 信息 文件 任务 工作 要求 不是 这个 目录 一个 一页 页面 离线 在线 不用 方案 方式 方法'.split(' '));
+const genericHan = new Set('开始 结束 使用 制作 创建 生成 编辑 修改 执行 运行 处理 查询 搜索 查看 检查 审查 核对 研究 进行 支持 需要 可以 完成 用户 当前 之后 之前 期间 提供 展示 输出 输入 结果 内容 正文 资料 信息 数据 文件 任务 工作 交付 要求 不是 这个 目录 一个 一页 页面 离线 在线 不用 方案 方式 方法 设计 实现 出现 日志 复现'.split(' '));
 const genericLatin = new Set('input output index file files page pages content task user local online offline create edit modify start stop run use used using show support result results format simple small one two'.split(' '));
+// Generic product suffixes do not identify a provider when qualified by a
+// distinct proper name (for example, "Example Drive"). The prefix remains
+// available as direct evidence for that provider's own skill.
+const qualifiedServiceSuffixes = new Set('drive cloud docs office calendar storage mail wiki'.split(' '));
 const segmenter = typeof Intl.Segmenter === 'function'
   ? new Intl.Segmenter('zh-CN', {granularity: 'word'}) : null;
 function queryWordSet(text) {
@@ -48,6 +57,44 @@ function positiveSkillText(value) {
     .replace(/(?:不要在以下场景触发|不适用(?:于)?|不用于|不要用于|避免用于|禁止用于|不建议用于)\s*[:：]?[^\n。！？!?；;]*/giu, ' ')
     .replace(/\b(?:do not use for|don't use for|not intended for|not suitable for|avoid using for|not for)\b[^\n.!?;]*/giu, ' ');
 }
+function namedServiceEvidence(skill, active) {
+  const serviceSuffix = /(?:云空间|云盘|网盘|知识库|工作台|文档管理|表格管理)$/u;
+  const names = [skill.nameZh, skill.name, ...list(skill.aliases)]
+    .map(value => String(value || '').trim())
+    .filter(value => /^[\p{Script=Han}]{3,14}$/u.test(value) && serviceSuffix.test(value));
+  // Some manifests have a transliterated identity and name the service only
+  // at the very start of their summary. Do not infer names from later examples.
+  const summary = String(skill.summaryZh || skill.description || '');
+  const head = /^\s*([\p{Script=Han}]{2,12}?(?:云空间|云盘|网盘|知识库|工作台|文档管理|表格管理))(?=文件|文档|管理|服务|平台|工具|技能|\s|[，。:：])/u.exec(summary);
+  if (head) names.push(head[1]);
+  return names.find(name => lexicalScore(active, name)) || null;
+}
+function agentInstructionWork(clauses) {
+  const model = '(?:\\bai(?:\\s+agent)?\\b|\\b(?:agent|llm|chatgpt|claude|gemini|codex)\\b|智能体|人工智能|大模型|语言模型|模型)';
+  const artifact = '(?:任务(?:说明|描述|要求|规范|指令)|(?:项目|开发|工作)(?:任务说明|说明|指令|需求)|需求(?:说明|描述)|(?:task|work)\\s+(?:instructions?|description|brief|specification)|instructions?)';
+  const edit = '(?:改写|重写|优化|完善|撰写|编写|编制|拟定|起草|生成|设计|写|整理|审查|检查|\\b(?:refine|rewrite|write|draft|create|improve|review)\\b)';
+  const target = new RegExp(`(?:给|为|供|面向|交给|让)\\s*${model}.{0,45}${artifact}|${artifact}.{0,45}(?:给|为|供|面向|交给|让)\\s*${model}|${artifact}.{0,60}\\b(?:for|to)\\s+(?:(?:the|an?)\\s+)?${model}`, 'i');
+  const writing = new RegExp(`${edit}.{0,40}${artifact}|${artifact}.{0,20}${edit}`, 'i');
+  return list(clauses).some(clause => {
+    // Concrete shell/build commands are not task instructions for an agent.
+    const scoped = String(clause).replace(/(?:shell|bash|powershell|终端|命令行|安装|部署|编译|构建|启动)\s*(?:命令|指令)/gi, ' ');
+    return target.test(scoped) && writing.test(scoped);
+  });
+}
+function capabilityHasTaskObject(capability, text, skill, clauses) {
+  if (capability === 'prompt-engineering')
+    return /提示词|提示语|\bprompt\b|(?:不知道|不会|说不清|表达不清).{0,30}(?:模型|\bai\b|描述|表达)|(?:需求|想法).{0,12}(?:模糊|混乱)/i.test(text) || agentInstructionWork(clauses);
+  if (capability === 'visual-design') {
+    // "design" also appears in nonvisual fields such as experiments. Only
+    // apply the visual-object check when the identity or leading summary
+    // actually describes a visual/interface specialty.
+    const identity = [skill.id, skill.nameZh, skill.name, skill.category, ...list(skill.aliases)].join(' ');
+    const leadingSummary = String(skill.summaryZh || skill.description || '').slice(0, 350);
+    if (!/(?:视觉|界面|网页|平面设计|排版|品牌设计|\b(?:visual|graphic|frontend|website|web|ui|ux)\b)/i.test(identity + ' ' + leadingSummary)) return true;
+    return /视觉|界面|网页|网站|\bui\b|\bux\b|前端|设计稿|设计系统|版式|排版|配色|字体|样式|品牌|图标|海报|插画|图表|幻灯片|\bpptx?\b|\bweb\b|website|graphic design|visual design/i.test(text);
+  }
+  return true;
+}
 function independentDescriptionHits(hits, retrieval, document) {
   // When segmentation is unavailable, preserve prior routing behavior rather
   // than asserting a word boundary or suppressing a potentially useful skill.
@@ -57,6 +104,8 @@ function independentDescriptionHits(hits, retrieval, document) {
     if (/^[\p{Script=Han}]+$/u.test(term))
       return retrieval.queryWords.has(term) && !genericHan.has(term)
         && document.positiveText.includes(term);
+    const qualifiers = retrieval.serviceQualifiers.get(term) || [];
+    if (qualifiers.length && !qualifiers.some(prefix => lexicalScore(document.positiveText, prefix))) return false;
     return !genericLatin.has(term) && term.length >= 3;
   });
 }
@@ -81,12 +130,22 @@ function retrievalTerms(text, experimental = false) {
     const match = pattern.exec(text);
     if (match && (experimental || !/\p{Script=Han}/u.test(match[0]))) for (const term of additions) { terms.add(term); inferred.push({term, evidence: match[0]}); }
   }
+  const softwareDiagnostic = softwareDiagnosticEvidence(text);
+  if (softwareDiagnostic && !terms.has('debug')) {
+    terms.add('debug');
+    inferred.push({term:'debug', evidence:softwareDiagnostic});
+  }
   return {terms, inferred};
 }
 
 function retrievalIndex(skills, activeText, experimental = false) {
   const {terms, inferred} = retrievalTerms(activeText, experimental);
   const queryWords = queryWordSet(activeText);
+  const serviceQualifiers = new Map();
+  for (const match of String(activeText).matchAll(/\b([A-Z][A-Za-z0-9.-]*)\s+([A-Z][A-Za-z0-9.-]*)\b/g)) {
+    const prefix = norm(match[1]), suffix = norm(match[2]);
+    if (qualifiedServiceSuffixes.has(suffix)) serviceQualifiers.set(suffix, [...(serviceQualifiers.get(suffix) || []), prefix]);
+  }
   const documents = skills.map((skill) => {
     const identity = [skill.id, skill.nameZh, skill.name, ...list(skill.aliases)].join(' ');
     const description = [skill.summaryZh, skill.description, ...list(skill.triggers)].join(' ');
@@ -95,7 +154,7 @@ function retrievalIndex(skills, activeText, experimental = false) {
   });
   const df = new Map();
   for (const doc of documents) for (const term of new Set([...doc.identity, ...doc.description])) df.set(term, (df.get(term) || 0) + 1);
-  return {terms, inferred, documents, df, corpusSize: skills.length, experimental, queryWords};
+  return {terms, inferred, documents, df, corpusSize: skills.length, experimental, queryWords, serviceQualifiers};
 }
 const explicitName = (skill) => [skill.id, skill.nameZh, skill.name, ...list(skill.aliases)].filter(Boolean);
 
@@ -239,6 +298,7 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
   const capability = inferCapability(skill);
   const phase = inferSkillStage(skill, capability);
   const triggerHits = list(skill.triggers).filter((term) => lexicalScore(active, term));
+  const serviceName = namedServiceEvidence(skill, active);
   const description = [skill.summaryZh, skill.description, skill.nameZh, skill.name, skill.category].filter(Boolean).join(' ');
   const rawLexicalHits = [...retrieval.terms].filter((term) => document.identity.has(term) || document.description.has(term))
     .map((term) => {
@@ -256,8 +316,9 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
   let score = (explicit ? 30 : 0) + Math.min(3, triggerHits.length) * 6 + descriptionScore + (domainMatch ? 3 : 0);
   if (lexicalScore(active, skill.id)) score += 5;
   if (capability === 'skill-governance' && /技能|skill|路由器|router/i.test(active)) score += 8;
-  const diagnosticIntent = /diagnostic|diagnos|troubleshoot|investigat|incident|outage/i.test(active)
-    && /mitigation|reversible|cause|evidence|checks|checks|检查|排查/i.test(active);
+  const softwareDiagnostic = Boolean(softwareDiagnosticEvidence(active));
+  const diagnosticIntent = softwareDiagnostic || (/diagnostic|diagnos|troubleshoot|investigat|incident|outage/i.test(active)
+    && /mitigation|reversible|cause|evidence|checks|checks|检查|排查/i.test(active));
   const shortName = String(skill.id || '').split(':').at(-1);
   const specialistNameTerms = words(shortName).filter((term) => !['debug', 'pro', 'workflow', 'systematic'].includes(term) && !/^\d+$/.test(term));
   const diagnosticNameMatch = diagnosticIntent && /\bdebug(?:ging)?\b/i.test([skill.id, skill.nameZh, skill.name].join(' '))
@@ -266,27 +327,48 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
   if (diagnosticNameMatch) score += 12;
   if (capability === 'browser-automation' && !/浏览器|browser|playwright|网页操作|自动化测试/i.test(active)) score -= 10;
   const strongDescription = lexicalHits.length >= 2 && descriptionScore >= 7;
-  if (!explicit && !triggerHits.length && !strongDescription && !domainMatch && !diagnosticNameMatch) score = 0;
-  if (!explicit && !triggerHits.length && !domainMatch && score < 8) score = 0;
-  if (!explicit && !triggerHits.length && !domainMatch && !diagnosticNameMatch && supportedHits !== null) {
+  const agentInstruction = capability === 'prompt-engineering' && agentInstructionWork(assessment.activeClauses);
+  if (!explicit && !triggerHits.length && !strongDescription && !domainMatch && !diagnosticNameMatch && !serviceName) score = 0;
+  if (!explicit && !triggerHits.length && !domainMatch && !serviceName && score < 8) score = 0;
+  if (!explicit && !triggerHits.length && !domainMatch && !diagnosticNameMatch && !serviceName && supportedHits !== null) {
     const distinct = new Set(supportedHits.map(hit => hit.term));
     const identityAnchor = supportedHits.some(hit => document.identity.has(hit.term));
-    if (distinct.size < 2 && !identityAnchor) score = 0;
+    if (distinct.size < 2 && !identityAnchor && !(agentInstruction && strongDescription)) score = 0;
   }
+  // A skill's examples can mention many unrelated projects. For these
+  // specialized capabilities, require the task object, not merely a topic
+  // from an example. Explicit names, matching triggers, and user-supplied
+  // domain matches remain higher-priority evidence.
+  if (!explicit && !triggerHits.length && !domainMatch && !capabilityHasTaskObject(capability, active, skill, assessment.activeClauses)) score = 0;
+  // A format-specific trigger alone can narrowly miss the consult threshold in
+  // small/custom catalogs. Require an exact requested filename extension AND
+  // an independent, direct identity match before restoring that consultation.
+  const identityTerms = (supportedHits || []).filter(hit => !hit.inferred && document.identity.has(hit.term));
+  const formatTrigger = triggerHits.find(term => /^[a-z][a-z0-9]{1,5}$/i.test(term)
+    && new RegExp(`\\.${term}(?=$|[^a-z0-9])`, 'i').test(active)
+    && (supportedHits || []).some(hit => !hit.inferred && hit.term === token(term))
+    && identityTerms.some(hit => hit.term !== token(term)));
+  const formatCorroborated = !explicit && Boolean(formatTrigger) && score > 0 && score < 20;
+  if (formatCorroborated) score = 20;
+  if (serviceName && score > 0 && score < 20) score = 20;
+  if (softwareDiagnostic && diagnosticNameMatch && score > 0 && score < 20) score = 20;
   if (score > 0) score += calibration?.adjustment || 0;
   const availability = skillAvailability(skill, host, runtimeCapabilities);
   if (!availability.discovered || !availability.readable || !availability.enabled || !availability.compatible) score = -100;
   const reasons = [];
   if (explicit) reasons.push('explicitly requested in active task');
   if (triggerHits.length) reasons.push(`matched task signal: ${triggerHits[0]}`);
+  if (agentInstruction && strongDescription) reasons.push('task explicitly requests writing instructions for an AI agent');
+  if (serviceName) reasons.push(`literal service name in task and skill: ${serviceName}`);
+  if (formatCorroborated) reasons.push('requested file extension is corroborated by an independent skill identity match');
   const explainedHits = supportedHits?.length ? supportedHits : lexicalHits;
   if (explainedHits.length) reasons.push(`distinctive manual terms: ${explainedHits.slice(0, 3).map((hit) => `${hit.term}${hit.inferred ? ' (inferred)' : ''}`).join(', ')}`);
   if (diagnosticNameMatch) reasons.push('diagnostic request plus mitigation/check requirement matches a general debugging manual');
   if (calibration?.adjustment) reasons.push(`verified feedback: ${calibration.adjustment > 0 ? '+' : ''}${calibration.adjustment}`);
-  const matchedPhrase = triggerHits[0] || (explicit ? names.find((name) => lexicalScore(active, name)) : explainedHits[0]?.term);
+  const matchedPhrase = triggerHits[0] || (explicit ? names.find((name) => lexicalScore(active, name)) : serviceName || explainedHits[0]?.term);
   const clauseIndex = assessment.activeClauses?.findIndex((clause) => matchedPhrase && lexicalScore(clause, matchedPhrase)) ?? -1;
   const inference = retrieval.inferred.find((item) => item.term === matchedPhrase);
-  const evidence = matchedPhrase ? [{kind: triggerHits.length ? 'trigger' : explicit ? 'explicit' : inference ? 'inferred-description' : 'description', phrase: matchedPhrase,
+  const evidence = matchedPhrase ? [{kind: triggerHits.length ? 'trigger' : explicit ? 'explicit' : serviceName ? 'service-name' : inference ? 'inferred-description' : 'description', phrase: matchedPhrase,
     querySignal: inference?.evidence || null,
     clauseIndex, snippet: clauseIndex >= 0 ? assessment.activeClauses[clauseIndex].slice(0, 160) : active.slice(0, 160)}] : [];
   return {skill, score, explicit, capability, phase, reasons, availability, evidence};

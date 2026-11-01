@@ -31,10 +31,9 @@ test('generic editability does not independently justify a diagram', () => {
   assert(!skill(r, 'diagram-example') || skill(r, 'diagram-example').suggestedMode === 'skip');
 });
 
-// Known boundary in both 4.3.2 and 4.3.3: this equally valid custom identity
-// can be recalled but is ranked below the consult threshold. This TODO keeps
-// the failed expectation visible without presenting it as a fixed regression.
-test.todo('a custom Word skill can be consulted when its id is not docx', () => {
+// This custom identity fell below the consult threshold in 4.3.2 and 4.3.3.
+// Its previously TODO assertion is now a required regression check.
+test('a custom Word skill can be consulted when its id is not docx', () => {
   const customSkills = skills.map(s => s.id === 'docx' ? {...s, id:'word-example'} : s);
   const r = routeTaskV4('离线制作可编辑的 Word 项目清单，保存为 list.docx。',
     {...opts, index:{...opts.index, skills:customSkills}});

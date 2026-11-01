@@ -88,6 +88,19 @@ export function instructionClauses(text='') {
 // "别用" is a prohibition; the same characters inside "分别用" are not.
 export const negativeDirective=/(?:不要|不得|禁止|不使用|不用|(?<![分识辨区判鉴])别用|无需|不需要|避免|do not|don't|never|without)/iu;
 
+function withoutReadMetadata(clause) {
+  // Keep the metadata noun if the surrounding directive actually changes it.
+  // For example, “查看最后修改时间” is a read, while “把文件修改时间改成
+  // 明天” is a change even though both contain the same noun.
+  const metadata=/(?:文件|文档|项目|工程|记录|资源|条目)(?:的)?(?:修改|更改|更新|编辑|创建|生成|上传|导出|编译|部署|发布|删除)(?:时间|日期|者|人)(?:(?:及|和|与|、)(?:最后|最近|上次)?(?:修改|更改|更新|编辑|创建|生成|上传|导出|编译|部署|发布|删除)(?:时间|日期|者|人))*|(?:最后(?:一次)?|最近(?:一次)?|上(?:一次|次)|首次|第一次)(?:修改|更改|更新|编辑|创建|生成|上传|导出|编译|部署|发布|删除)(?:时间|日期|者|人|记录|历史|状态|日志|进度|详情|结果)/g;
+  return clause.replace(metadata,(match,offset,whole)=>{
+    const before=whole.slice(Math.max(0,offset-24),offset),after=whole.slice(offset+match.length,offset+match.length+24);
+    if (/(?:设置|设定|更改|修改|调整|改写|更新|重置)\s*(?:(?:原|该|这个|当前|已有|现有)(?:的)?)?$/u.test(before)
+        ||/^\s*(?:改为|改成|设为|设成|设置为|设置成|调整为|调整成|更改为|更改成|修改为|修改成|变为|变成)/u.test(after))return match;
+    return '';
+  });
+}
+
 export function inferUserConstraints(query='',activeText='',activeClauses=[]) {
   // A URL is an input, never an instruction, even when its query contains
   // words such as “禁止联网” or “只读”. Keep a marker for source-scope intent.
@@ -97,10 +110,10 @@ export function inferUserConstraints(query='',activeText='',activeClauses=[]) {
   // Evaluate each directive independently: a negation in one sentence must
   // never bind a network or source phrase in the next sentence.
   const active=Array.isArray(activeClauses)&&activeClauses.length?activeClauses:instructionClauses(activeText);
-  const actionable=active.map(c=>c.replace(/(?<!不能)(?<!不可能)(?<!不可以)(?<!不得)(?<!不要)(?<!不会)(?<!无法)(?:不要|不得|禁止|不能|请勿|不必|无需|不需要|不|避免)\s*(?:实际|直接|擅自|自行|再|去|执行|进行){0,3}\s*(?:修改|改动|更改|改写|重构|修复|编辑|删除|创建|新建|部署|上传|发送|写入|保存|替换|更新|导出|编译|另存)/g,'')
-    .replace(/\b(?:do not|don't|never|without)\s+(?:actually\s+|directly\s+)?(?:edit|editing|modify|modifying|change|changing|fix|fixing|repair|delete|deleting|create|creating|write|writing|deploy|update|updating|save|saving)\b/gi,'')
+  const actionable=active.map(c=>withoutReadMetadata(c.replace(/(?<!不能)(?<!不可能)(?<!不可以)(?<!不得)(?<!不要)(?<!不会)(?<!无法)(?:不要|不得|禁止|不能|请勿|不必|无需|不需要|不|避免)\s*(?:实际|直接|擅自|自行|再|去|执行|进行){0,3}\s*(?:修改|改动|更改|改写|重构|修复|编辑|删除|创建|新建|部署|上传|发送|写入|保存|替换|更新|导出|编译|另存)/g,'')
+    .replace(/\b(?:do not|don't|never|without)\s+(?:actually\s+|directly\s+)?(?:edit|editing|modify|modifying|change|changing|alter|altering|fix|fixing|repair|delete|deleting|create|creating|write|writing|deploy|update|updating|save|saving)\b/gi,'')
     .replace(/(?:说明|解释|介绍|描述|讲解|讨论)(?:一下)?(?:如何|怎样|怎么)(?:去|来)?(?:修改|更改|修复|编辑|删除|创建|写入|导出|编译|部署|更新)(?:配置|文件|项目|代码|数据库|工程|内容){0,3}/g,'')
-    .replace(/\b(?:explain|describe|outline|show|tell)(?:\s+\w+){0,3}?\s+how\s+to\s+(?:edit|modify|change|fix|repair|delete|create|write|deploy|update)\b(?:\s+(?:the|a|an|configuration|config|files?|documents?|project|code)){0,5}/gi,''));
+    .replace(/\b(?:explain|describe|outline|show|tell)(?:\s+\w+){0,3}?\s+how\s+to\s+(?:edit|modify|change|fix|repair|delete|create|write|deploy|update)\b(?:\s+(?:the|a|an|configuration|config|files?|documents?|project|code)){0,5}/gi,'')));
   const outputPattern=/(?:另存|另行保存|保存(?:到|为)|写入|导出).{0,25}(?:文件|报告|文档|工程|代码|项目|\.\w{2,5}\b)|(?:输出|写出|记录|生成|制作|撰写).{0,25}(?:到|至|为|入|存为).{0,20}(?:文件|报告|文档|工程|代码|项目|\.\w{2,5}\b)|(?:新建|创建|生成|制作|修改|修复|重构|删除).{0,20}(?:文件|文档文件|工程|代码|项目|原文件|原文|\.\w{2,5}\b)|\b(?:save|write|create|edit|modify|update|export|delete)\b.{0,35}(?:\b(?:file|document file|project|code)\b|[a-z0-9_-]+\.(?:csv|json|md|txt|pdf|docx|xlsx|pptx|png|jpg|html|js|py)\b)/i;
   // A no-change instruction may be followed in the same clause by a
   // separately requested new output. The negative applies to the original,
@@ -109,18 +122,18 @@ export function inferUserConstraints(query='',activeText='',activeClauses=[]) {
     ||/\b(?:without|do not|don't|never)\s+(?:modifying|changing|editing|modify|change|edit|overwriting|overwrite)\b.{0,25}\b(?:original|input|source|existing)\b.{0,20}\b(?:and|then|but)\s+(?:create|write|save|generate)\b.{0,35}(?:\b(?:new file|report|copy)\b|[a-z0-9_.-]+\.(?:csv|json|md|txt|pdf|docx|xlsx|pptx|html|js|py)\b)/i.test(c));
   const outputFile=actionable.some(c=>outputPattern.test(c))||separateOutput;
   const explicitGlobal=clauses.some(c=>/(?:全程|整个任务|所有操作|严格).{0,8}只读|(?:不要|不得|禁止|不能|严禁|请勿).{0,8}(?:修改|写入|更改|删除).{0,8}(?:任何|所有|一切).{0,8}(?:文件|内容|项目|数据)?|\b(?:no changes at all|do not modify any files|do not write any files)\b/i.test(c));
-  const readOnlyLanguage=clauses.some(c=>/只读|只(?:查|看|读|审查|审阅|做.{0,5}分析)|仅(?:限)?(?:阅读|查看|检查|审查|审阅|分析)|\bread.only\b|\breview only\b/i.test(c.replace(/(?:不要|不必|无需|不需要|不要求|禁止)\s*(?:使用|采用|保持)?\s*只读(?:模式)?/g,'').replace(/\b(?:not|no longer)\s+read.only\b/gi,'')));
+  const readOnlyLanguage=clauses.some(c=>/只读|只(?:查|看|读|审查|审阅|做.{0,5}分析)|仅(?:限)?(?:阅读|查看|检查|审查|审阅|分析)|\bread.only\b|\b(?:review|check|inspect|examine|audit|read|view)\s+only\b/i.test(c.replace(/(?:不要|不必|无需|不需要|不要求|禁止)\s*(?:使用|采用|保持)?\s*只读(?:模式)?/g,'').replace(/\b(?:not|no longer)\s+read.only\b/gi,'')));
   const preserveInput=clauses.some(c=>/(?:保持|保留).{0,12}(?:文件|原文|文档|数据|工程).{0,8}(?:原样|不变|不动)|(?:原|原始|输入|已有|现有|提供的)(?:文件|文档|数据|工程|项目|内容|资料)(?:保持)?(?:原样|不变|不动|不被修改)|(?:不要|不得|禁止|请勿|不).{0,5}(?:修改|改动|更改|写入)(?:.{0,10}(?:文件|文档|数据|工程|内容))?|\b(?:do not|don't|never|without)\s+(?:modify|edit|overwrite|change|changing|alter)\b.{0,35}\b(?:input|original|source|existing|repository|repo|website|page|document|file|image|project|part)\b/i.test(c));
   // Inspection and advice are ordinarily non-mutating, but do not suppress a
   // separately requested implementation or output file. Keep advice about a
   // fix distinct from an instruction to actually apply it.
-  const inspection=active.some(c=>/检查|审查|审阅|核对|核查|审计|查看|检视|校对|排查|复核|盘点|只做.{0,5}分析|\b(?:inspect|examine|review|audit)\b/i.test(c));
+  const inspection=active.some(c=>/检查|审查|审阅|核对|核查|审计|查看|检视|校对|排查|复核|盘点|只做.{0,5}分析|\b(?:check|inspect|examine|review|audit)\b/i.test(c));
   const mutation=actionable.some(c=>{
     const direct=c.replace(/(?:提出|整理|给(?:出|我)?|说明|评估|讨论|制定|提供|设计|输出|展示|列出|反馈|撰写|写出|总结|罗列|汇报|指出).{0,8}(?:修复|修改|更新|部署|删除|改进|优化)(?:的)?(?:方案|建议|计划|方法|思路|措施|意见|清单|方向)/g,'')
       .replace(/(?:导出|更新|修改|修复|编译|生成|部署|上传|发送|删除|保存)(?:的)?(?:状态|记录|日志|历史|结果|进度|详情)/g,'')
       .replace(/\b(?:propose|suggest|outline|explain|recommend|describe)\s+(?:an?\s+)?(?:reversible\s+)?(?:fix|repair|change|update|solution)\b/gi,'')
       .replace(/\bbefore\s+(?:compilation|building|deployment)\b/gi,'');
-    return /修改|更改|改写|重构|修复(?!方案|建议|计划|思路|措施|方法)|编辑|删除|创建|新建|开发|实现|部署|上传|发送|写入|保存|替换|更新|导出|编译|另存|(?:生成|绘制|画|制作|创作).{0,20}(?:文件|图片|图像|照片|插画|海报|视频|代码|程序)|\b(?:edit|modify|overwrite|update|fix|repair|remove|delete|create|write|generate|implement|develop|build|compile|deploy|publish|send|upload|save)\b|\b(?:make|draw|render|produce)\b.{0,40}\b(?:images?|illustrations?|pictures?|icons?|posters?|videos?)\b/i.test(direct);
+    return /修改|更改|改写|重构|修复(?!方案|建议|计划|思路|措施|方法)|编辑|删除|创建|新建|开发|实现|部署|上传|发送|写入|保存|替换|更新|导出|编译|另存|(?:生成|绘制|画|制作|创作).{0,20}(?:文件|图片|图像|照片|插画|海报|视频|代码|程序)|\b(?:edit|modify|change|alter|overwrite|update|fix|repair|remove|delete|create|write|generate|implement|develop|build|compile|deploy|publish|send|upload|save)\b|\b(?:make|draw|render|produce)\b.{0,40}\b(?:images?|illustrations?|pictures?|icons?|posters?|videos?)\b/i.test(direct);
   });
   const restrictedInput=readOnlyLanguage||preserveInput;
   const readOnly=explicitGlobal||((restrictedInput||inspection)&&!outputFile&&!mutation);

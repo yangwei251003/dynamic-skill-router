@@ -40,6 +40,13 @@ try {
   }else if(['route','plan','search','resolve','list','health','coverage','refresh-index','capabilities','search-capabilities','recover'].includes(command)){
     const parsed=parse(args); let {query,options}=parsed;
     if(parsed.jsonInput){const envelope=JSON.parse(fs.readFileSync(0,'utf8'));query=envelope.query||query;options={...envelope.options,...options};}
+    // Match the MCP default when a real model ID makes V4 calibration possible.
+    // Unknown models cannot match trusted observations, so avoid a needless
+    // feedback-file read in that case; an explicit --no-feedback always wins.
+    if (options.useFeedback === undefined && typeof options.currentModel === 'string' && options.currentModel.trim()
+        && (command === 'search' || (['route','plan'].includes(command) && options.contractVersion === 4))) {
+      options.useFeedback = true;
+    }
     if(command==='recover'){
       query||=fs.readFileSync(0,'utf8').trim();if(!options.routeId)throw new Error('recover requires --route-id');
       output({routeId:options.routeId,...planRecovery({...taskAssessment(query,options.taskContext),rawText:query},options)});
