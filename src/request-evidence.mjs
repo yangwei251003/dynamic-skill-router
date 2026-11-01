@@ -86,7 +86,7 @@ export function instructionClauses(text='') {
 }
 
 // "别用" is a prohibition; the same characters inside "分别用" are not.
-export const negativeDirective=/(?:不要|不得|禁止|(?<![分识辨区判鉴])别用|无需|不需要|避免|do not|don't|never|without)/iu;
+export const negativeDirective=/(?:不要|不得|禁止|不使用|不用|(?<![分识辨区判鉴])别用|无需|不需要|避免|do not|don't|never|without)/iu;
 
 export function inferUserConstraints(query='',activeText='',activeClauses=[]) {
   // A URL is an input, never an instruction, even when its query contains
@@ -146,10 +146,16 @@ export function inferUserConstraints(query='',activeText='',activeClauses=[]) {
   const withoutFormatLimit=c=>c
     .replace(/(?:只|仅)(?:能)?(?:使用|用)\s*(?:[一二三四五六七八九十两百千\d]+)\s*(?:句话?|段(?:话)?|行|字|条|页|张|秒|分钟|小时|个(?:字|句|段|词))/g,'')
     .replace(/\b(?:only|solely)\s+(?:use|write|produce)\s+(?:one|two|three|four|five|\d+)\s+(?:sentences?|paragraphs?|words?)\b/gi,'');
-  const providedOnly=clauses.some(c=>!sourceNegated(c)&&sourcePattern.test(withoutFormatLimit(c)));
+  // A specifically named local input file is a supplied source even when the
+  // user says “same directory” instead of “provided”. An output filename is
+  // not evidence that the inputs are restricted.
+  const localFileSource=/(?:只|仅|只能|仅能).{0,8}(?:使用|用|根据|依据|参考|读取|阅读|查阅|分析)\s*(?:(?:同(?:一)?目录|当前目录|本地|此目录|这个目录|本目录|该目录)(?:的|下|中|里|内)?\s*)?(?:[a-z0-9_.-]+\.(?:csv|tsv|xlsx?|json|jsonl|txt|md|pdf|docx?|pptx?)\b|(?:本地|同目录|当前目录|该|此|这个|已有|当前|原始|原|输入)(?:文件|数据|资料|表格|文档))\s*(?:(?:中|里|内)(?:的)?(?:数据|内容|信息|记录|文字|表格)?|(?:的)?(?:数据|内容|信息|记录|文字)|(?:作为)?(?:唯一)?(?:来源|依据|材料|数据源)|(?=\s*(?:$|并|进行|来|做|生成|总结|分析)))/i;
+  const localDirectorySource=/(?:只|仅|只能|仅能).{0,8}(?:使用|用|根据|依据|参考|读取|阅读|查阅|分析)\s*(?:同(?:一)?目录|当前目录|本地|此目录|这个目录|本目录|该目录)(?:\s|中|下|里|内|的){0,20}(?:数据|资料|内容|文件|文档|表格|记录)/i;
+  const localOnly=clauses.some(c=>!sourceNegated(c)&&(localFileSource.test(withoutFormatLimit(c))||localDirectorySource.test(withoutFormatLimit(c))));
+  const providedOnly=localOnly||clauses.some(c=>!sourceNegated(c)&&sourcePattern.test(withoutFormatLimit(c)));
   const specifiedSite=clauses.some(c=>!sourceNegated(c)&&/(?:只|仅|只能|仅能).{0,8}(?:用|使用|参考|查阅|依据|访问|查|查询|搜索|检索).{0,30}(?:官网|官方网站|网站|站点)|(?:只|仅|只能|仅能).{0,8}在.{0,30}(?:官网|官方网站|网站|站点).{0,10}(?:查|搜索|检索|阅读|访问)|\b(?:use|consult|cite|search)\s+(?:only|solely)\b.{0,45}\b(?:site|website|domain|official pages?)\b|\b(?:only|solely)\s+(?:use|consult|cite|search)\b.{0,45}\b(?:site|website|domain|official pages?)\b/i.test(c));
   const exactProvided=clauses.some(c=>!sourceNegated(c)&&/(?:只|仅|只能|仅能).{0,10}(?:用|使用|根据|依据).{0,15}(?:提供|给定|给的|所给|附上).{0,12}(?:链接|网址|正文|文本|附件|文档|资料)|\b(?:provided|supplied|given|attached)\s+(?:links?|urls?|text|documents?|notes|materials?|files?|data)\b/i.test(c));
   const onlyUrl=clauses.some(c=>!sourceNegated(c)&&/(?:只|仅|只能|仅能).{0,10}(?:用|使用|访问|查看|阅读).{0,20}USER_SUPPLIED_URL|\b(?:only|solely)\s+(?:use|visit|open|read)\b.{0,25}USER_SUPPLIED_URL/i.test(c));
-  const sourceScope=onlyUrl||providedOnly&&(!specifiedSite||exactProvided)?'provided-only':specifiedSite?'specified-site-only':providedOnly?'provided-only':null;
+  const sourceScope=onlyUrl||providedOnly&&(!specifiedSite||exactProvided||localOnly)?'provided-only':specifiedSite?'specified-site-only':providedOnly?'provided-only':null;
   return {readOnly,networkForbidden,sourceScope,...(preserveInputs?{preserveInputs:true}:{})};
 }

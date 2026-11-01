@@ -79,9 +79,15 @@ function queryClauses(query) {
     // A future time horizon inside a request to produce a plan is current work.
     const currentPlan = /^(?:(?:请你?|现在|本次|帮我|麻烦)\s*)*(?:(?:为|针对)未来.{0,25}(?:制定|编写|设计|准备)|(?:制定|编写|设计|准备)).*(?:计划|方案)/.test(usable)
       || /^(?:please\s+)?(?:write|create|prepare|design)\b.*\bplan\b/i.test(usable);
-    const planning = currentPlan ? usable.replace(/(?:未来|后续)(?=.{0,35}(?:计划|方案))/g, '').replace(/\bfuture\b/gi, '') : usable;
-    const futureAt=controlText(planning).search(/(?:以后|将来|未来|后续|下一步|届时|日后|eventually|later|future|subsequently)/i);
-    const beforeFuture=futureAt<0?planning:planning.slice(0,futureAt);
+    const planning = (currentPlan ? usable.replace(/(?:未来|后续)(?=.{0,35}(?:计划|方案))/g, '').replace(/\bfuture\b/gi, '') : usable)
+      // “绘制后续步骤流程图” requests a current artifact. It is different
+      // from “后续再绘制流程图”, which is a future action.
+      .replace(/((?:绘制|画出|画|制作|生成|编写|设计|列出|分析|梳理|整理|描述|说明|展示|规划|总结)(?:.{0,20}?))(?:后续|下一步|未来)(?=(?:的)?(?:步骤|流程|操作|环节|方案|计划|路径|趋势|安排|任务|内容))/g,'$1');
+    // An attributive “无需联网的小游戏” does not negate the following goal.
+    // Keep deriving the actual restrictions from the unmodified raw query.
+    const boundedModifiers=planning.replace(/(?:无需|无须|不需要|不用|不必|不)(?:联网|上网|网络|外部依赖|第三方依赖|外部资源|外部服务)(?:(?:和|与|及|或|、|以及)(?:联网|上网|网络|外部依赖|第三方依赖|外部资源|外部服务)){0,4}的/g,' ');
+    const futureAt=controlText(boundedModifiers).search(/(?:以后|将来|未来|后续|下一步|届时|日后|eventually|later|future|subsequently)/i);
+    const beforeFuture=futureAt<0?boundedModifiers:boundedModifiers.slice(0,futureAt);
     const negativeAt=controlText(beforeFuture).search(negativeDirective);
     const beforeNegative=negativeAt<0?beforeFuture:beforeFuture.slice(0,negativeAt);
     return beforeNegative.trim() && !isNegative(beforeNegative) ? [beforeNegative.trim()] : [];
