@@ -36,7 +36,7 @@ report_outcome 请复用任务 routeId。缺少任务标识的记录只供审计
       "reason": "需要先取得指定报告内容"
     }]
   },
-  "invocationContext": {"mode": "read", "readOnly": true, "networkForbidden": true},
+  "invocationContext": {"mode": "read", "readOnly": true, "networkForbidden": true, "sourceScope": "provided-only", "preserveInputs": true},
   "taskMethods": {"maxCards": 2, "disabledIds": []},
   "qualityProfile": "balanced"
 }
@@ -44,7 +44,7 @@ report_outcome 请复用任务 routeId。缺少任务标识的记录只供审计
 
 另传真实 `runtimeTools`。`evidenceRefs` 是同时存在于完整 query 和当前 activeText 的字面片段，不是任意证据编号；引文里的要求不据此变成当前授权。精确名称匹配仅产生独立 `capabilityConsultations`，`available=false` 排除、缺失可用性或效果保持未知，注册不代表来源已读或动作已执行。
 
-`requestContext.rawQuery` 保留原文，`hostInterpretation` 分列宿主解释。`mode` 接受 plan/read/execute；plan/read、readOnly=true、networkForbidden=true 和 allowedActions 只收紧，false/execute 不能取消已有约束。纯文本 context 仅在有卡/限制时附简短条件段。
+`requestContext.rawQuery` 保留原文，`hostInterpretation` 分列宿主解释。`mode` 接受 plan/read/execute；plan/read、readOnly=true、networkForbidden=true、sourceScope、preserveInputs=true 和 allowedActions 只收紧，false/execute 不能取消已有约束。宿主可依据原文把其识别出的全任务来源和输入保护限制放入 invocationContext；这些字段不构成新的用户授权。显式 allowedActions 中不含 network 时，远程访问不在本次允许动作内；未提供列表时不凭缺省推断禁网。纯文本 context 仅在有卡/限制时附简短条件段。
 
 `methodCandidates` 为 0–2 张可拒绝咨询卡；`taskMethods=false` 关闭，maxCards=0 也不选卡。无相关缺口时允许空，已有 fast 不读取目录。qualityProfile 的 economy/balanced/quality 只调整建议阅读预算和核验深度，默认旧预算不变，必要验收与安全约束不省略。
 
@@ -54,6 +54,6 @@ report_outcome 请复用任务 routeId。缺少任务标识的记录只供审计
 
 `requestContext.rawQuery` 仍是用户原文。出现引用、代码或附件上下文时，`sourceSegments` 可用 UTF-16 的 `start/end` 指向原文片段；`boundary: unclosed` 表示无法可靠识别结束位置，宿主应结合原文判断，不能将后续材料当成授权。识别结果是辅助信息，并非完整语言理解或安全边界的替代。
 
-`taskConstraints` 分开表示全任务 `readOnly`、`networkForbidden`、`sourceScope: provided-only` / `specified-site-only` 与 `preserveInputs`。仅用所给资料不自动禁止读取用户提供的 URL；只用指定网站时在该站范围内查证，不凭机构名称猜造域名；保护输入不自动禁止创建用户要求的单独输出。当前范围、结构化宿主限制与用户指令都只能收紧，模型仍需结合原始任务和具体工具检查权限与输入。对未确认副作用的工具不得据名称猜测可安全写入、联网或发送。
+`taskConstraints` 分开表示全任务 `readOnly`、`networkForbidden`、`sourceScope: provided-only` / `specified-site-only` 与 `preserveInputs`。仅用所给资料不自动禁止读取用户提供的 URL；只用指定网站时在该站范围内查证，不凭机构名称猜造域名；保护输入不自动禁止创建用户要求的单独输出。若原文和宿主分别要求这两类来源限制，应同时满足，查看 `sourceScopes` 与交集说明，不得将其当作可任选其一。当前字段仍表示全任务，不能精确表达不同部分各有来源限制；宿主须核对原文并分阶段保守处理。当前范围、结构化宿主限制与用户指令都只能收紧，模型仍需结合原始任务和具体工具检查权限与输入。对未确认副作用的工具不得据名称猜测可安全写入、联网或发送。旧 MCP 进程可能不识别新增输入字段，须核对实际工具 schema 与返回的有效限制。
 
 工具候选可能包含 `intentMatches` 与 `inputEvidence`，表示当前动作与工具自述用途的可解释匹配、用户明确给出的输入，不代表已调用、已登录或结果可用。复合任务优先覆盖不同缺口，仍可选择跳过；对于不确定的动作、阶段或效果，应读取精确工具说明并核实范围。当前 `runtimeTools` 注册表证明入口可见；仅由名称清单推断时可用性保持未知，`declaredAvailable` 保留宿主明确声明，认证与业务结果分别为未知。不得用这些候选信息推断认证或实际任务成功。

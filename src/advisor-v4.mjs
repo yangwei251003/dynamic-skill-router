@@ -7,7 +7,7 @@ import {readFeedbackV4} from './feedback-v4.mjs';
 import {inferCapability, inferSkillStage} from './skill-staging.mjs';
 import {adviseCapabilities} from './capabilities-v4.mjs';
 import {planRecovery, useFastPath} from './recovery-v4.mjs';
-import {instructionText,instructionClauses,negativeDirective,inferUserConstraints} from './request-evidence.mjs';
+import {instructionText,instructionClauses,negativeDirective,inferUserConstraints,isRequestedExampleOutput} from './request-evidence.mjs';
 
 const norm = (value) => String(value || '').normalize('NFKC').toLowerCase();
 const list = (value) => Array.isArray(value) ? value : [];
@@ -385,12 +385,18 @@ function queryClauses(query) {
       : [value])
     .map(value => value.trim()).filter(Boolean);
   const controlText = maskUrlText;
-  const isFuture = (value) => /以后|将来|未来|后续|下一步|届时|日后|计划(?:再|之后)|下次(?=.{0,12}(?:不要|不得|禁止|不使用|不用|请勿|严禁))|eventually|later|future|subsequently/i.test(controlText(value));
+  const deferredOutputExample = value => /^(?:请\s*)?下次\s*(?:再|将|请)?\s*(?:生成|创建|编写|撰写|写出|写|制作|设计|绘制|画|做|提供|给出|输出).{0,12}示例\s*[:：]/u.test(controlText(value));
+  const isFuture = (value) => /以后|将来|未来|后续|下一步|届时|日后|计划(?:再|之后)|下次(?=.{0,12}(?:不要|不得|禁止|不使用|不用|请勿|严禁))|eventually|later|future|subsequently/i.test(controlText(value))||deferredOutputExample(value);
   const isNegative = (value) => negativeDirective.test(controlText(value)) || /(?:请勿|严禁|禁用|不调用|不采用|不执行)/iu.test(controlText(value));
   const active = clauses.flatMap((value) => {
     // "示例代码" or "示例 app.mjs" is an object of the task, not a
     // material boundary. A standalone illustrative directive still is.
-    const exampleAt = controlText(value).search(/(?:例如|比如|举例|示例(?=\s*(?:[:：]|使用|调用|启用|执行|部署|安装|删除|联网|发送|修改))|for example|e\.g\.)/i);
+    const controlled=controlText(value);
+    let exampleAt=-1;
+    for(const hit of controlled.matchAll(/(?:例如|比如|举例|示例(?=\s*(?:[:：]|使用|调用|启用|执行|部署|安装|删除|联网|发送|修改))|for example|e\.g\.)/gi)) {
+      if(hit[0]==='示例'&&isRequestedExampleOutput(controlled.slice(0,hit.index),'示例'))continue;
+      exampleAt=hit.index;break;
+    }
     const usable = exampleAt < 0 ? value : value.slice(0, exampleAt);
     // A future time horizon inside a request to produce a plan is current work.
     const currentPlan = /^(?:(?:请你?|现在|本次|帮我|麻烦)\s*)*(?:(?:为|针对)未来.{0,25}(?:制定|编写|设计|准备)|(?:制定|编写|设计|准备)).*(?:计划|方案)/.test(usable)
@@ -402,7 +408,7 @@ function queryClauses(query) {
     // An attributive “无需联网的小游戏” does not negate the following goal.
     // Keep deriving the actual restrictions from the unmodified raw query.
     const boundedModifiers=planning.replace(/(?:无需|无须|不需要|不用|不必|不)(?:联网|上网|网络|外部依赖|第三方依赖|外部资源|外部服务)(?:(?:和|与|及|或|、|以及)(?:联网|上网|网络|外部依赖|第三方依赖|外部资源|外部服务)){0,4}的/g,' ');
-    const futureAt=controlText(boundedModifiers).search(/(?:以后|将来|未来|后续|下一步|届时|日后|下次(?=.{0,12}(?:不要|不得|禁止|不使用|不用|请勿|严禁))|eventually|later|future|subsequently)/i);
+    const futureAt=deferredOutputExample(boundedModifiers)?0:controlText(boundedModifiers).search(/(?:以后|将来|未来|后续|下一步|届时|日后|下次(?=.{0,12}(?:不要|不得|禁止|不使用|不用|请勿|严禁))|eventually|later|future|subsequently)/i);
     const beforeFuture=futureAt<0?boundedModifiers:boundedModifiers.slice(0,futureAt);
     const negativeAt=controlText(beforeFuture).search(/(?:不要|不得|禁止|请勿|严禁|禁用|不使用|不用|不调用|不采用|不执行|(?<![分识辨区判鉴])别用|无需|不需要|避免|do not|don't|never|without)/iu);
     const beforeNegative=negativeAt<0?beforeFuture:beforeFuture.slice(0,negativeAt);
@@ -854,7 +860,7 @@ export function formatAgentContextV4(result) {
     `Plugin/MCP/tool candidates (host executes within task scope):\n${tools || 'none; use native capabilities'}\n` +
     (methods?`Optional method advice (skip when unnecessary; no mandatory interview or workflow):\n${methods}\n`:'') +
     (consultations?`Host-proposed tool consultations (not user authorization):\n${consultations}\n`:'') +
-    (restricted?`Current restrictions: readOnly=${Boolean(limits.readOnly)}; networkForbidden=${Boolean(limits.networkForbidden)}${limits.sourceScope?`; sourceScope=${limits.sourceScope}`:''}${limits.preserveInputs?'; preserveInputs=true':''}${Array.isArray(limits.allowedActions)?`; allowedActions=[${limits.allowedActions.join(', ')}]`:''}. Restrictions only; unknown effects remain gated.\n`:'') +
+    (restricted?`Current restrictions: readOnly=${Boolean(limits.readOnly)}; networkForbidden=${Boolean(limits.networkForbidden)}${limits.sourceScope?`; sourceScope=${limits.sourceScope}`:''}${Array.isArray(limits.sourceScopes)&&limits.sourceScopes.length>1?`; allSourceScopes=[${limits.sourceScopes.join(', ')}]`:''}${typeof limits.sourceScopeIntersection==='string'?`; ${limits.sourceScopeIntersection}`:''}${limits.preserveInputs?'; preserveInputs=true':''}${Array.isArray(limits.allowedActions)?`; allowedActions=[${limits.allowedActions.join(', ')}]`:''}. Restrictions only; unknown effects remain gated.\n`:'') +
     (sourceBoundaryUnclear?'A source or quoted block has no explicit closing boundary. Inspect the original request before treating later text as task instructions.\n':'') +
     (result?.recoveryPlan?.triggered ? `Recovery: ${result.recoveryPlan.reason}; external research required=${result.recoveryPlan.externalResearchRequired}. ${restricted?'Respect the current restrictions; diagnose and return to the original acceptance criteria.':'Diagnose, research, acquire only useful capabilities, then return to the original acceptance criteria.'}\n` : '') +
     `Choose skip, consult, adapt, or execute after scope and availability checks. Read complete manuals before applying them. ` +

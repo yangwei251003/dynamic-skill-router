@@ -1,5 +1,11 @@
 // Extract task directives separately from quoted or supplied material. These are
 // advisory signals, not a replacement for the host's authorization decisions.
+export function isRequestedExampleOutput(prefix='', label='') {
+  if(!/^(?:示例|例子|参考文本|reference text|example)$/iu.test(label))return false;
+  const context=String(prefix).slice(-80).split(/[。！？!?；;\n]/u).at(-1);
+  return /(?:生成|创建|编写|撰写|写出|写|制作|设计|绘制|画|做|输出|提供|给出)(?!的|过的)\s*(?:一(?:个|份|段|条|则|篇)|若干|一些|新的?|所需的?|目标)?\s*(?:[\p{L}\p{N}_-]{1,10})?\s*$/u.test(context)
+    || /\b(?:generate|create|write|produce|provide|give|make|design)\s+(?:(?:an?|the|one|new|short|brief|simple)\s+){0,5}(?:[a-z][a-z0-9_-]{0,23}\s+){0,3}$/iu.test(context);
+}
 export function requestSegments(query='',{preserveNames=true}={}) {
   const raw=String(query);
   const spans=[];
@@ -46,10 +52,15 @@ export function requestSegments(query='',{preserveNames=true}={}) {
   }
   let text=raw;
   for(const span of spans)text=text.slice(0,span.start)+blank(text.slice(span.start,span.end))+text.slice(span.end);
-  const labels=/(?:引用材料|参考资料|参考文本|原文|正文|示例|例子|材料(?:如下|为|是)?|(?:以下|下面|如下)(?:的|是|为)?(?:正文|内容|文本|资料)|(?:正文|资料|参考资料)(?:如下|为|是)|reference text|quoted text|supplied text|example)\s*[:：]/gim;
+  const labels=/(?:引用材料|参考资料|参考文本|原文|正文|示例|例子|材料(?:如下|为|是)?|(?:以下|下面|如下)(?:的|是|为)?(?:正文|内容|文本|资料)|(?:正文|资料|参考资料)(?:如下|为|是)|(?<![\p{L}\p{N}_-])(?:reference text|quoted text|supplied text|example))\s*[:：]/gimu;
   let labelMatch;
   while((labelMatch=labels.exec(text))){
     const start=labelMatch.index,end=labels.lastIndex;
+    // A request to create an example or reference text introduces the desired
+    // output, not supplied material. Keep its following instructions active.
+    // Genuine material labels and quoted/fenced content remain isolated.
+    const label=labelMatch[0].replace(/\s*[:：]$/u,'');
+    if(isRequestedExampleOutput(text.slice(0,start),label))continue;
     const next=spans.filter(s=>s.start>=end&&/^\s*$/.test(raw.slice(end,s.start))).sort((a,b)=>a.start-b.start)[0];
     add(start,end,'material-label');text=text.slice(0,start)+blank(text.slice(start,end))+text.slice(end);
     const openBlockquote=next?.role==='quoted-material'&&/^[ \t]*>/.test(raw.slice(next.start,next.end));
@@ -80,7 +91,10 @@ export function instructionClauses(text='') {
   // Query-string '?' and '=' belong to a supplied URL, not a sentence break.
   const urls=[];
   const protectedText=String(text).replace(/https?:\/\/[^\s<>"“”。，。！？；]+/giu,value=>{const i=urls.push(value)-1;return `\uE000${i}\uE001`;});
-  return protectedText.split(/[。！？!?;；，,\n]+|(?<!\d)\.(?=\s+\S)/u)
+  // Keep an explicitly future conditional and its dependent continuation in
+  // the same clause; the latter is not a current instruction after a comma.
+  const conditionalText=protectedText.replace(/((?:以后|将来|未来|下次|日后|后续)\s*(?:如果|若|一旦|当|等到)[^。；;！？!?\n，,]{1,100})[，,](?=\s*(?:再|才|就|将|会|可以|不要|不得|禁止|请勿))/gu,'$1 ');
+  return conditionalText.split(/[。！？!?;；，,\n]+|(?<!\d)\.(?=\s+\S)/u)
     .flatMap(c=>c.split(/(?:但是|然而|而是|(?<![\p{L}\p{N}])but(?=\s)|(?<![\p{L}\p{N}])instead(?=\s))/iu))
     .map(c=>c.replace(/\uE000(\d+)\uE001/g,(_,i)=>urls[Number(i)]).trim()).filter(Boolean);
 }
@@ -323,10 +337,20 @@ export function inferUserConstraints(query='',activeText='',activeClauses=[]) {
     .filter(c=>!/^(?:以后|将来|未来|下次|日后|后续|下一步|eventually\b|later\b|in future\b)/i.test(c))
     .map(c=>c.split(/(?:例如|比如|举例|以后|将来|未来|下次|日后|后续|下一步|for example|e\.g\.|\blater\b|\bin future\b|不要|不得|禁止|请勿|(?:不必|无需|不需要|不)\s*(?:写入|保存|输出|交付|生成|制作|创建|新建|编写|撰写|导出|另存)|\bdo not\b|\bdon't\b|\bnever\b)/i)[0]
       .replace(/(?:说明|解释|介绍|描述|讲解|讨论)(?:一下)?(?:如何|怎样|怎么)(?:去|来)?(?:写入|保存|输出|交付|生成|制作|创建|新建|编写|撰写|导出|另存).*/u,''));
-  const localArtifact=/(?:编写|撰写|写出|写|输出|生成|制作|创建|新建|导出|保存).{0,15}(?:本地|磁盘|硬盘|本机).{0,20}(?:报告|文档|文件|表格|工作簿|脚本|代码)/u;
+  const localArtifact=/(?:编写|撰写|写出|写|输出|生成|制作|创建|新建|导出|保存).{0,15}(?:本地|磁盘|硬盘|本机).{0,20}(?:报告|文档|文件|表格|(?:数据|对照|汇总|统计|比较|费用|采购|预算|结果|计算|输出|登记|核对|工作)?表(?!达|示|述|面|现)|工作簿|脚本|代码)/u;
   const filePath='[\\p{L}\\p{N}_.\\\\/-]+\\.(?:csv|tsv|json|md|txt|pdf|docx|xlsx|pptx|html|js|mjs|py|png|jpg|svg)\\b';
   const artifactFile=new RegExp(`(?:另存|保存|写入|输出|导出)\\s*(?:到|至|为)?\\s*${filePath}|(?:编写|撰写|创建|生成|制作|交付|写)\\s*(?:一份|一个|文件|文档|脚本|报告)?\\s*${filePath}|(?:编写|撰写|写|生成|制作|创建|导出).{0,25}(?:到|至|为)\\s*${filePath}`,'iu');
-  const explicitLocalOutput=artifactClauses.some(c=>localArtifact.test(c)||artifactFile.test(c)||/(?:交付|输出|保存|写入|放置|导出|存储)\s*(?:到|至|于)\s*(?:[\p{L}\p{N}_.\\/-]+[\\/]|(?:本地|指定|当前|工作)(?:目录|文件夹))/iu.test(c));
+  const writeToFile=c=>{
+    const match=/(?:写到|写至|写进)\s*(?:(?:一(?:个|份|张)|新的?|指定的?|本地的?|目标|另一个)\s*){0,3}(?:文件|文档|报告|工作簿|表格|脚本|磁盘)/u.exec(c);
+    if(!match||/(?:不|无需|不必|不用|不需要)\s*(?:(?:把|将).{0,30})?(?:写到|写至|写进)/u.test(c))return false;
+    const before=c.slice(0,match.index).split(/(?:并且|然后|同时|接着|并)/u).at(-1);
+    const after=c.slice(match.index+match[0].length);
+    if(/(?:说明|解释|介绍|描述|讲解|讨论)\s*(?:一下)?\s*(?:如何|怎样|怎么).{0,25}$/u.test(before))return false;
+    if(/(?:说明|解释|介绍|描述|讲解|讨论).{0,25}$/u.test(before)&&/^(?:里|中|内)?(?:的)?(?:方法|办法|原理|步骤|建议|方案)/u.test(after))return false;
+    return true;
+  };
+  const explicitLocalOutput=artifactClauses.some(c=>localArtifact.test(c)||artifactFile.test(c)||/(?:交付|输出|保存|写入|放置|导出|存储)\s*(?:到|至|于)\s*(?:[\p{L}\p{N}_.\\/-]+[\\/]|(?:本地|指定|当前|工作)(?:目录|文件夹))/iu.test(c)
+    ||writeToFile(c));
   const outputFile=actionable.some(c=>outputPattern.test(c))||separateOutput||explicitLocalOutput;
   const explicitGlobal=clauses.some(c=>{
     const direct=c.replace(/(?:不要|不必|无需|不需要|不要求|并非|不是)\s*(?:全程|整个任务|所有操作|严格)\s*只读/gu,'')
@@ -337,13 +361,49 @@ export function inferUserConstraints(query='',activeText='',activeClauses=[]) {
   const preserveInput=clauses.some(c=>{
     // A negated prohibition or a negated preservation request is not itself
     // an instruction to protect the object from edits.
-    const direct=c.replace(/(?:不必|无需|无须|不用|不需要|不要求|不要)\s*(?:再)?\s*(?:禁止|限制|阻止|不要|不)\s*(?:修改|改动|更改|写入|覆盖).{0,15}(?:文件|文档|数据|工程|内容|项目|配置|代码|源码|原图|原件)/gu,'')
+    const direct=c.replace(/(?:不必|无需|无须|不用|不需要|不要求|不要)\s*(?:再)?\s*(?:禁止|限制|阻止|不要|不)\s*(?:修改|改动|更改|改写|重写|写入|覆盖).{0,15}(?:文件|文档|数据|工程|内容|项目|配置|代码|源码|原图|原件|清单|表格|台账|报表|表单|记录|工作簿)/gu,'')
       .replace(/(?:不必|无需|无须|不用|不需要|不要求|不要)\s*(?:保持|保留).{0,12}(?:文件|原文|文档|数据|工程|代码|源码|原图|原件).{0,8}(?:原样|不变|不动)/gu,'')
       .replace(/(?:说明|解释|介绍|讨论|描述|讲解|分析|研究)\s*(?:一下)?\s*(?:如何|怎样|怎么|为什么)?\s*(?:保持|保留).{0,12}(?:文件|原文|文档|数据|工程|代码|源码).{0,8}(?:原样|不变|不动)(?:的(?:方法|建议|原理|含义|概念))?/gu,'')
+      .replace(/(?:说明|解释|介绍|讨论|描述|讲解|分析|研究)\s*(?:一下)?\s*(?:如何|怎样|怎么|为什么|为何)?\s*(?:不要|不得|禁止|严禁|请勿|不)\s*(?:覆盖|写入).{0,12}(?:原始|原有|原|输入|已有|现有|源)(?:文件|文档|数据|工程|项目|代码|源码|图|图片|照片)(?:的(?:方法|建议|原理|含义|概念))?/gu,'')
+      .replace(/(?:说明|解释|介绍|讨论|描述|讲解|分析|研究)\s*(?:一下)?\s*(?:原始|原有|原|输入|已有|现有|源)(?:文件|文档|数据|工程|项目|代码|源码|图片|照片|图)\s*(?:仅|只|只能)\s*(?:用于|用来)?\s*(?:读取|阅读|查看)(?:的)?(?:含义|概念|原理|原因|利弊|区别|意义|做法)/gu,'')
+      .replace(/(?:说明|解释|介绍|讨论|描述|讲解|分析|研究)\s*(?:一下)?\s*(?:为什么|为何|如何)?\s*(?:原始|原有|原|输入|源)(?:的)?\s*(?:(?!以外|之外)[\p{L}\p{N}]){0,8}(?:清单|表格|台账|报表|表单|记录|工作簿)\s*(?:本身|的内容)?\s*(?:不要|不得|禁止|严禁|不能|请勿|不)\s*(?:改写|重写|修改|更改|覆盖)(?:的)?(?:含义|概念|原理|原因|利弊|区别|意义|做法|方法)/gu,'')
+      .replace(/(?:不必|无需|无须|不用|不需要|不要)\s*(?:(?:让|将|把)\s*)?(?:(?:原表|原清单|原始表格|原表格|输入表格|源表)\s*(?:本身|的内容)?\s*(?:保持|保留|维持)|(?:保持|保留|维持)\s*(?:原表|原清单|原始表格|原表格|输入表格|源表))\s*(?:原样|不变|不动)/gu,'')
+      .replace(/(?:说明|解释|介绍|讨论|描述|讲解|分析|研究)\s*(?:一下)?\s*(?:如何|怎样|怎么|为什么|为何)?\s*(?:原表|原清单|原始表格|原表格|输入表格|源表)\s*(?:本身|的内容)?\s*(?:保持|保留|维持)\s*(?:原样|不变|不动)(?:的)?(?:含义|概念|原理|原因|利弊|区别|意义|做法|方法)/gu,'')
+      .replace(/\b(?:explain|describe|discuss)\s+(?:why|how)\s+(?:not to|to avoid)\s+(?:rewrite|alter|edit|modify|overwrite)\b.{0,60}\b(?:original|input|source)\b.{0,35}\b(?:lists?|tables?|spreadsheets?|ledgers?|worksheets?|workbooks?)\b/gi,'')
       .replace(/\b(?:do not|don't|never|no need to)\s+(?:keep|preserve|leave)\s+(?:the\s+)?(?:source code|codebase|code|source files?|original files?)\s+(?:unchanged|intact|as is)\b/gi,'');
     return /(?:保持|保留).{0,12}(?:文件|原文|文档|数据|工程|代码|源码).{0,8}(?:原样|不变|不动)|(?:原|原始|输入|已有|现有|提供的)(?:文件|文档|数据|工程|项目|内容|资料|代码|源码)(?:保持)?(?:原样|不变|不动|不被修改)|(?:不要|不得|禁止|请勿|不).{0,5}(?:修改|改动|更改|写入).{0,10}(?:文件|文档|数据|工程|内容|项目|配置|代码|源码|原图|原件)|(?:不要|不得|禁止|请勿)\s*(?:(?:联网|连网|上网|安装依赖|安装软件)\s*[、或和及与]\s*){1,5}(?:修改|改动|更改|写入|覆盖).{0,8}(?:输入|原始|原有|已有|现有)(?:文件|文档|数据|工程|内容|项目|代码|源码)|\b(?:do not|don't|never|without)\s+(?:modify|modifying|edit|editing|overwrite|overwriting|change|changing|alter|altering)\b.{0,35}\b(?:input|original|source|existing|repository|repo|website|page|documents?|files?|images?|projects?|parts?|code|codebase)\b|\b(?:keep|preserve|leave)\s+(?:the\s+)?(?:source code|codebase|code|source files?|original files?)\s+(?:unchanged|intact|as is)\b/i.test(direct)
-      ||/(?:保留|保持)\s*(?:原图|原件|原(?:始)?(?:图片|照片|文件))(?=$|[并和与及、，。；\s]|(?:不变|原样|不动))/u.test(direct);
+      ||/(?:保留|保持)\s*(?:原图|原件|原(?:始)?(?:图片|照片|文件))(?=$|[并和与及、，。；\s]|(?:不变|原样|不动))/u.test(direct)
+      ||/(?:不要|不得|禁止|严禁|不能|请勿|勿|不)\s*(?:再|直接|擅自)?\s*(?:覆盖|写入)(?:\s*(?:和|或|及|与)\s*(?:覆盖|写入|更改|修改))*\s*(?:原始|原有|原|输入|已有|现有|源)(?:文件|文档|数据|工程|项目|代码|源码|图片|照片|图)(?!以外|之外)/u.test(direct)
+      ||/(?:原始|原有|原|输入|已有|现有|源)(?:文件|文档|数据|工程|项目|代码|源码|图片|照片|图)\s*(?:仅|只|只能)\s*(?:用于|用来)?\s*(?:读取|阅读|查看)/u.test(direct)
+      ||/(?:原始|原有|原|输入|已有|现有|源)(?:的)?\s*(?:(?!以外|之外)[\p{L}\p{N}]){0,8}(?:清单|表格|台账|报表|表单|记录|工作簿)(?!以外|之外)\s*(?:本身|的内容)?\s*(?:不要|不得|禁止|严禁|不能|请勿|勿|不)\s*(?:改写|重写|修改|改动|更改|覆盖|写入)/u.test(direct)
+      ||/(?:不要|不得|禁止|严禁|不能|请勿|勿|不)\s*(?:直接|擅自|再)?\s*(?:改写|重写|修改|改动|更改|覆盖|写入)\s*(?:原始|原有|原|输入|已有|现有|源)(?:的)?\s*(?:(?!以外|之外)[\p{L}\p{N}]){0,8}(?:清单|表格|台账|报表|表单|记录|工作簿)(?!以外|之外)/u.test(direct)
+      ||/\b(?:do not|don't|never)\s+(?:rewrite|alter|edit|modify|overwrite)\s+(?:the\s+)?(?:original|input|source)(?:\s+[a-z0-9_-]+){0,3}\s+(?:lists?|tables?|spreadsheets?|ledgers?|worksheets?|workbooks?)\b/i.test(direct)
+      ||/\b(?:original|input|source)(?:\s+[a-z0-9_-]+){0,3}\s+(?:lists?|tables?|spreadsheets?|ledgers?|worksheets?|workbooks?)\s+(?:must|shall|should|can)\s+not\s+be\s+(?:rewritten|altered|edited|modified|overwritten)\b/i.test(direct)
+      ||/(?:原表|原清单|原始表格|原表格|输入表格|源表)(?!以外|之外)\s*(?:本身|的内容)?\s*(?:请|应|须|务必|必须|需)?\s*(?:保持|保留|维持)\s*(?:原样|不变|不动)/u.test(direct)
+      ||/(?:保持|保留|维持)\s*(?:原表|原清单|原始表格|原表格|输入表格|源表)(?!以外|之外)\s*(?:原样|不变|不动)/u.test(direct);
   });
+  // File paths in inline code are data, not instructions. Restore only those
+  // paths, then require an explicit input/original role and preservation
+  // language so a protected output or another object is not promoted to an
+  // input-wide ban.
+  const namedInputFile=new RegExp(`(?:原始|原有|原|输入|已有|现有|源|\\b(?:original|input|source)\\b)\\s*(?:的\\s*)?${filePath}`,'iu');
+  const namedInputPreservation=instructionClauses(maskDirectiveUrls(textWithInlinePaths(query)))
+    .filter(c=>!/^(?:以后|将来|未来|下次|日后|后续|下一步|eventually\b|later\b|in future\b)/i.test(c))
+    .some(c=>{
+      const direct=c.split(/(?:例如|比如|举例|for example|e\.g\.)/i)[0];
+      if(/(?:不必|无需|无须|不用|不需要|不要)\s*(?:保持|保留|维持).{0,60}(?:原样|不变|不动)/u.test(direct)
+        ||/\b(?:do not|don't|never|no need to)\s+(?:keep|preserve|leave)\b.{0,80}\b(?:unchanged|intact|as is)\b/i.test(direct)
+        ||/(?:说明|解释|介绍|讨论|描述|讲解|研究)\s*(?:一下)?\s*(?:如何|怎样|怎么|为什么|为何)?.{0,60}(?:保持|保留|维持).{0,40}(?:原样|不变|不动)(?:的)?(?:含义|概念|原理|原因|方法|意义)?/u.test(direct))return false;
+      const match=namedInputFile.exec(direct);if(!match)return false;
+      const before=direct.slice(0,match.index),after=direct.slice(match.index+match[0].length);
+      if(/(?:不必|无需|无须|不用|不需要|不要)\s*(?:禁止|限制|阻止)\s*(?:覆盖|写入)\s*$/u.test(before))return false;
+      return /(?:不要|不得|禁止|严禁|不能|请勿|勿|不)\s*(?:再|直接|擅自)?\s*(?:覆盖|写入)\s*$/u.test(before)
+        ||/^.{0,18}?(?:保持|保留|维持)\s*(?:原样|不变|不动)/u.test(after)
+        ||/(?:保持|保留|维持)\s*$/u.test(before)&&/^\s*(?:原样|不变|不动)/u.test(after)
+        ||/^\s*(?:请\s*)?(?:不得|禁止|严禁|不能|请勿|不)\s*(?:覆盖|写入)/u.test(after)
+        ||/\b(?:keep|preserve|leave)\s+(?:the\s+)?$/i.test(before)&&/^\s*(?:unchanged|intact|as is)\b/i.test(after)
+        ||/\b(?:do not|don't|never|without)\s+(?:overwrite|overwriting|modify|modifying|change|changing|edit|editing)\s+(?:the\s+)?$/i.test(before);
+    });
   // Inspection and advice are ordinarily non-mutating, but do not suppress a
   // separately requested implementation or output file. Keep advice about a
   // fix distinct from an instruction to actually apply it.
@@ -383,8 +443,8 @@ export function inferUserConstraints(query='',activeText='',activeClauses=[]) {
   // independently requested output remains allowed. Object-level bans such
   // as calendar events are not promoted to global input preservation.
   const scheduledReminder=active.some(scheduledReminderRequest);
-  const readOnly=explicitGlobal||((readOnlyLanguage||((preserveInput||inspection)&&!scheduledReminder))&&!outputFile&&!mutation&&!testMutation&&!imageObjectMutation);
-  const preserveInputs=preserveInput||((outputFile||mutation||testMutation||imageObjectMutation)&&readOnlyLanguage);
+  const readOnly=explicitGlobal||((readOnlyLanguage||((preserveInput||namedInputPreservation||inspection)&&!scheduledReminder))&&!outputFile&&!mutation&&!testMutation&&!imageObjectMutation);
+  const preserveInputs=preserveInput||namedInputPreservation||((outputFile||mutation||testMutation||imageObjectMutation)&&readOnlyLanguage);
   const allowsProvidedNetworkUse=clauses.some(c=>{
     const permitted=c.replace(/(?:不要|不得|禁止|不能|请勿|别|不)\s*(?:主动|自行|直接|再|去)?\s*(?:打开|访问|读取|阅读|浏览|查看|使用|用)/g,'')
       .replace(/\b(?:do not|don't|never)\s+(?:open|visit|read|fetch|use|consult)\b/gi,'');
@@ -412,8 +472,8 @@ export function inferUserConstraints(query='',activeText='',activeClauses=[]) {
     const offline=/离线\s*(?:完成|处理|运行|使用|总结|汇总|统计|归纳|整理|提取|转换|分析|阅读|审查|检查|工作|执行|计算|编辑|生成|制作|查找|检索|搜索|安装|验证|调查|设计|解答|研究|模式|环境|状态|条件|方式|解释|介绍|讲解)/i;
     return forbidden.test(direct)||noRemoteAcquisition.test(direct)||offline.test(direct)||/\b(?:no (?:internet|network)|offline only|work offline)\b|\b(?:do not|don't|never)\b.{0,28}\b(?:use|access|connect|browse|search|go online)\b.{0,25}\b(?:internet|web|network|online)\b/i.test(direct);
   });
-  const sourcePattern=/(?:只|仅|只能|仅能).{0,7}(?:使用|用|阅读|读取|查看|浏览|研读|分析|读|根据|依据|参考|基于|利用|依托).{0,18}(?:(?:提供|给定|所给|已有|给的|给你(?:的)?|发给你(?:的)?|附上|附带|上传(?:的)?).{0,10}(?:资料|来源|内容|文件|数据|文档|笔记|图片|视频|素材|文本|链接|附件)|附件|正文|原文|材料|文本|链接)|(?:不要|不得|禁止|不能|请勿|不允许).{0,8}(?:检索|搜索|查找|查阅|引用|获取|使用|采用|读取|参考|利用|浏览).{0,10}(?:其他|其它|额外|外部|更多|第三方).{0,8}(?:资料|来源|文献|信息|网页|网站|材料|内容|文档|数据)|\b(?:(?:only|solely)\s+(?:use|read|consult|rely on|based on)|(?:use|read|consult|rely on)\s+(?:only|solely))\b.{0,35}\b(?:(?:provided|supplied|given|attached)\s+(?:sources?|text|documents?|links?|notes|materials?|files?|data)|sources?|text|notes)\b|\b(?:do not|don't|never)\s+(?:search|consult|use)\b.{0,25}\b(?:other|additional|external)\s+(?:sources|materials|references)\b/i;
-  const sourceNegated=c=>/(?:不必|无需|无须|不用|不需要|不要|不要求|没有要求|不限制|不局限|不限定).{0,12}(?:限制|(?:只|仅)(?:能)?(?:使用|用|阅读|读取|查看|浏览|研读|分析|读|引用|参考|根据|依据))|(?:不只|不仅|不止|不单|不光|并非只|并非仅|不是只|不是仅)(?:仅|是|单)?(?:使用|用|阅读|读取|查看|浏览|研读|分析|读|引用|参考|根据|依据)|\b(?:do not|don't|never)\s+(?:restrict|limit|require|insist|force)\b.{0,60}\b(?:only|solely)\b|\b(?:do not|don't|never)\s+(?:use|read|consult|analy[sz]e)\s+(?:only|solely)\b/i.test(c);
+  const sourcePattern=/(?:只|仅|只能|仅能).{0,7}(?:使用|(?<!引)用|阅读|读取|查看|浏览|研读|分析|读|根据|依据|参考|基于|利用|依托).{0,18}(?:(?:提供|给定|所给|已有|给的|给你(?:的)?|发给你(?:的)?|附上|附带|上传(?:的)?).{0,10}(?:资料|来源|内容|文件|数据|文档|笔记|图片|视频|素材|文本|链接|附件)|附件|正文|原文|材料|文本|链接)|(?:不要|不得|禁止|不能|请勿|不允许).{0,8}(?:检索|搜索|查找|查阅|获取|使用|采用|读取|参考|利用|浏览).{0,10}(?:其他|其它|额外|外部|更多|第三方).{0,8}(?:资料|来源|文献|信息|网页|网站|材料|内容|文档|数据)|\b(?:(?:only|solely)\s+(?:use|read|consult|rely on|based on)|(?:use|read|consult|rely on)\s+(?:only|solely))\b.{0,35}\b(?:(?:provided|supplied|given|attached)\s+(?:sources?|text|documents?|links?|notes|materials?|files?|data)|sources?|text|notes)\b|\b(?:do not|don't|never)\s+(?:search|consult|use)\b.{0,25}\b(?:other|additional|external)\s+(?:sources|materials|references)\b/i;
+  const sourceNegated=c=>/(?:不必|无需|无须|不用|不需要|不要|(?<![分识辨区判鉴])别|不要求|没有要求|不限制|不局限|不限定).{0,12}(?:限制|(?:只|仅)(?:能)?(?:以|使用|用|阅读|读取|查看|浏览|研读|分析|读|引用|参考|根据|依据))|(?:不只|不仅|不止|不单|不光|并非只|并非仅|不是只|不是仅)(?:仅|是|单)?(?:以|使用|用|阅读|读取|查看|浏览|研读|分析|读|引用|参考|根据|依据)|\b(?:do not|don't|never)\s+(?:restrict|limit|require|insist|force)\b.{0,60}\b(?:only|solely)\b|\b(?:do not|don't|never)\s+(?:(?:use|read|consult|analy[sz]e)\s+(?:only|solely)|(?:only|solely)\s+(?:use|read|consult|analy[sz]e))\b/i.test(c);
   // “Only three sentences using supplied notes” limits the answer's length,
   // not its sources. A separate source restriction in the same clause remains.
   const withoutFormatLimit=c=>c
@@ -422,14 +482,62 @@ export function inferUserConstraints(query='',activeText='',activeClauses=[]) {
   // A specifically named local input file is a supplied source even when the
   // user says “same directory” instead of “provided”. An output filename is
   // not evidence that the inputs are restricted.
-  const localFileSource=/(?:只|仅|只能|仅能).{0,8}(?:使用|用|根据|依据|参考|读取|阅读|查阅|分析)\s*(?:(?:同(?:一)?目录|当前目录|本地|此目录|这个目录|本目录|该目录)(?:的|下|中|里|内)?\s*)?(?:[a-z0-9_.-]+\.(?:csv|tsv|xlsx?|json|jsonl|txt|md|pdf|docx?|pptx?)\b|(?:本地|同目录|当前目录|该|此|这个|已有|当前|原始|原|输入)(?:文件|数据|资料|表格|文档))\s*(?:(?:中|里|内)(?:的)?(?:数据|内容|信息|记录|文字|表格)?|(?:的)?(?:数据|内容|信息|记录|文字)|(?:作为)?(?:唯一)?(?:来源|依据|材料|数据源)|(?=\s*(?:$|并|进行|来|做|生成|总结|分析)))/i;
-  const localDirectorySource=/(?:只|仅|只能|仅能).{0,8}(?:使用|用|根据|依据|参考|读取|阅读|查阅|分析)\s*(?:同(?:一)?目录|当前目录|本地|此目录|这个目录|本目录|该目录)(?:\s|中|下|里|内|的){0,20}(?:数据|资料|内容|文件|文档|表格|记录)/i;
+  const localFileSource=/(?:只|仅|只能|仅能).{0,8}(?:使用|(?<!引)用|根据|依据|参考|读取|阅读|查阅|分析)\s*(?:(?:同(?:一)?目录|当前目录|本地|此目录|这个目录|本目录|该目录)(?:的|下|中|里|内)?\s*)?(?:[a-z0-9_.-]+\.(?:csv|tsv|xlsx?|json|jsonl|txt|md|pdf|docx?|pptx?)\b|(?:本地|同目录|当前目录|该|此|这个|已有|当前|原始|原|输入)(?:文件|数据|资料|表格|文档))\s*(?:(?:中|里|内)(?:的)?(?:数据|内容|信息|记录|文字|表格)?|(?:的)?(?:数据|内容|信息|记录|文字)|(?:作为)?(?:唯一)?(?:来源|依据|材料|数据源)|(?=\s*(?:$|并|进行|来|做|生成|总结|分析)))/i;
+  const localDirectorySource=/(?:只|仅|只能|仅能).{0,8}(?:使用|(?<!引)用|根据|依据|参考|读取|阅读|查阅|分析)\s*(?:同(?:一)?目录|当前目录|本地|此目录|这个目录|本目录|该目录)(?:\s|中|下|里|内|的){0,20}(?:数据|资料|内容|文件|文档|表格|记录)/i;
   const localCsvSource=/(?:只|仅|只能|仅能)\s*(?:使用|用|根据|依据|参考|读取|阅读|查阅|分析|查)\s*(?:本地|本机|本目录|当前目录|该目录)(?:的|中|下|内)?\s*(?:CSV|TSV|XLSX?|JSONL?)\b|\b(?:(?:only|solely)\s+(?:use|read|consult|analy[sz]e)|(?:use|read|consult|analy[sz]e)\s+(?:only|solely))\s+(?:the\s+)?(?:local|on-device)\s+(?:CSV|TSV|XLSX?|JSONL?)\b/i;
   const localOutputFormat=/(?:本地|本机|本目录|当前目录|该目录)\s*(?:的)?\s*(?:CSV|TSV|XLSX?|JSONL?)\s*(?:文件)?(?:格式|形式)\s*(?:(?:来进行|用于|作为|进行|来)\s*)?(?:导出|保存|写入|输出|生成|制作|记录|报告|结果|文件)|\b(?:local|on-device)\s+(?:CSV|TSV|XLSX?|JSONL?)\s+format\s+(?:to|for)\s+(?:export|save|write|output)\b/i;
   const localOnly=clauses.some(c=>!sourceNegated(c)&&(localFileSource.test(withoutFormatLimit(c))||localDirectorySource.test(withoutFormatLimit(c))||c.split(/(?:并且|并|然后|同时|\band\b)/iu).some(part=>localCsvSource.test(withoutFormatLimit(part))&&!localOutputFormat.test(part))));
-  const providedOnly=localOnly||clauses.some(c=>!sourceNegated(c)&&sourcePattern.test(withoutFormatLimit(c)));
+  // A short “不查阅外部资料” is as restrictive as “不要查阅…”. Do not
+  // treat negated prohibitions or an explanation of the phrase as a limit.
+  const shortExternalBan=/(?<!不)(?<!别)(?<!不要)(?<!无需)(?<!不必)(?<!不用)(?<!并非)(?<!不是)(?:不要|不得|不允许|禁止|严禁|不能|请勿|不|勿|(?<![分识辨区判鉴])别)\s*(?:(?:再|主动|额外|自行|去)\s*){0,4}(?:检索|搜索|查找|查阅|获取|使用|采用|读取|参考|利用|浏览|看|查).{0,10}(?:其他|其它|额外|外部|更多|第三方).{0,8}(?:资料|来源|文献|信息|网页|网站|材料|内容|文档|数据)/u;
+  const sourceDirective=c=>withoutFormatLimit(c)
+    .replace(/(?:只|仅)(?:能)?\s*(?:用|使用|采用)\s*(?:(?:提供|上传|给定)(?:的)?)?(?:附件|文档|文件|文本)(?:的)?(?:格式|样式|版式|模板)\s*(?:(?:来|用来|进行|作为)\s*)?(?:导出|输出|生成|制作|排版|保存|渲染)/gu,'')
+    .replace(/(?:说明|解释|介绍|讨论|描述|讲解|分析|研究|探讨)\s*(?:一下)?\s*(?:为何|为什么|如何)?\s*(?:不|不得|禁止|不能|请勿)\s*(?:参考|查阅|检索|搜索|使用|获取|读取|浏览)\s*(?:任何|所有|一切)?\s*(?:附件|清单|表格|表单|表|文档|文件|资料|材料|原文|正文)(?:以外|之外|外)(?:的)?(?:资料|来源|文献|信息|网页|网站|材料|内容|文档|数据)(?:的)?(?:含义|概念|原理|原因|利弊|区别|意义|做法)/gu,'')
+    .replace(/(?:说明|解释|介绍|讨论|描述|讲解|分析|研究|探讨)\s*(?:一下)?\s*(?:为何|为什么|如何)?\s*(?:附件|清单|表格|表单|表|文档|文件|资料|材料|原文|正文)(?:以外|之外|外)(?:的)?(?:资料|来源|文献|信息|网页|网站|材料|内容|文档|数据)(?:均|都|一律|全部)?\s*(?:不|不得|禁止|不能|请勿)\s*(?:再)?\s*(?:检索|搜索|查找|查阅|获取|使用|采用|读取|参考|利用|浏览|看|查)(?:的)?(?:含义|概念|原理|原因|利弊|区别|意义|做法)/gu,'')
+    .replace(/(?:说明|解释|介绍|讨论|描述|讲解|分析|研究|探讨)\s*(?:一下)?\s*(?:为何|为什么|如何)\s*(?:不|勿)\s*(?:检索|搜索|查找|查阅|引用|获取|使用|采用|读取|参考|利用|浏览).{0,10}(?:其他|其它|额外|外部|更多|第三方).{0,8}(?:资料|来源|文献|信息|网页|网站|材料|内容|文档|数据)/gu,'')
+    .replace(/(?:说明|解释|介绍|讨论|描述|讲解|分析|研究|探讨)\s*(?:一下)?\s*(?:不|勿)\s*(?:检索|搜索|查找|查阅|引用|获取|使用|采用|读取|参考|利用|浏览).{0,10}(?:其他|其它|额外|外部|更多|第三方).{0,8}(?:资料|来源|文献|信息|网页|网站|材料|内容|文档|数据)(?:的)?(?:含义|概念|原理|原因|利弊|区别|意义|做法)/gu,'');
+  const onlyLookProvided=/(?<!不)(?<!不必)(?<!无需)(?<!不用)(?<!不要)(?<!并非)(?<!不是)(?<!别)(?:只|仅|只能|仅能)\s*(?:查看|看)\s*(?:(?:我|你|用户)(?:提供|上传|给出|发给)?的?|(?:提供|上传|给定|附带)的?)?\s*(?:附件(?!(?:的)?(?:格式|大小|名称|路径|属性|文件名|元数据))|原文|正文|(?:资料|材料|文档|文件|文本))/u;
+  const onlyLookProvidedEnglish=/\b(?:only|solely)\s+(?:look at|review|inspect)\s+(?:the\s+)?(?:provided|supplied|given|attached|uploaded)\s+(?:sources?|materials?|documents?|attachments?|files?|text)\b/i;
+  const outsideSourceBan=/(?<!不)(?<!别)(?<!不必)(?<!无需)(?<!不用)(?<!不要)(?<!并非)(?<!不是)(?:不要|不得|禁止|严禁|不能|请勿|勿|(?<![分识辨区判鉴])别|不)\s*(?:(?:再|主动|额外|自行|去)\s*){0,4}(?:检索|搜索|查找|查阅|获取|使用|采用|读取|参考|利用|浏览|看|查)(?:\s*(?:和|或|及|与|以及)\s*(?:检索|搜索|查找|查阅|获取|使用|采用|读取|参考|利用|浏览|看|查)){0,4}.{0,8}(?:附件|正文|原文|材料|资料|文档|文件|文本|清单|表格|表)(?:以外|之外|外)(?:的)?(?:资料|来源|文献|信息|网页|网站|材料|内容|文档|数据)/u;
+  const outsideSourceBanEnglish=/\b(?:do not|don't|never)\s+(?:search|consult|use|read|access|retrieve)(?:\s+(?:or|and)\s+(?:search|consult|use|read|access|retrieve)){0,4}\s+(?:any\s+)?(?:information|sources?|materials?|references?|data)\s+(?:beyond|outside|other than)\s+(?:the\s+)?(?:attachments?|(?:provided|supplied|given|attached|uploaded)\s+(?:sources?|materials?|documents?|files?))\b/i;
+  const soleSupplied=/(?:(?:我|用户)?(?:上传|提供|给出|附带|发给).{0,12}(?:资料|来源|内容|文件|数据|文档|材料|文本|附件)|(?:附件|所给(?:的)?(?:资料|材料|文档|文件))).{0,8}(?:就是|均是|都是|即为|构成|作为|是|为)\s*(?:(?:本次|此次|这次)(?:的)?)?\s*(?:全部|所有|唯一|惟一)(?:的)?(?:依据|来源|材料|信息|数据|资料)/u;
+  const soleSuppliedEnglish=/\b(?:provided|supplied|given|attached|uploaded)\s+(?:sources?|materials?|documents?|attachments?|files?)\s+(?:are|is|constitute)\s+(?:the\s+)?(?:only|sole|entire)\s+(?:sources?|evidence|basis|materials?)\b(?!(?:\s+of)?\s+(?:format|formatting|layout|styles?|design|metadata)\b)/i;
+  // Source-qualified basis statements and object-first bans express source
+  // limits without the more familiar “only use / do not search” word order.
+  // Citing is deliberately excluded: a citation limit is not a reading ban.
+  const suppliedBasis=/(?:只|仅|只能|仅能|仅限)\s*以\s*(?:附件|原文|正文|(?:(?:我|用户)?(?:所附|附上|附带|提供|给定|上传|所给|已给|随附)(?:的)?[^，,；;。！？!?\n]{0,22}?(?:清单|表格|表单|报表|文档|资料|材料|文件|文本|数据|附件)))(?:的(?:内容|数据|记录))?\s*(?:作为|当作|为)\s*(?:(?:唯一|全部)(?:的)?)?\s*(?:(?:计算|核算|统计|分析)(?:的)?)?\s*(?:依据|来源|证据|数据源)/u;
+  const suppliedBasisEnglish=/\b(?:only|solely)\s+(?:(?:use|using)\s+)?(?:the\s+)?(?:provided|supplied|given|attached|uploaded)\s+(?:[a-z0-9_-]+\s+){0,4}?(?:lists?|tables?|spreadsheets?|documents?|materials?|files?|attachments?)\s+(?:as\s+)?(?:the\s+)?(?:only\s+|sole\s+)?(?:basis|sources?|evidence)\b/i;
+  const objectOutsideReadBan=/(?:附件|清单|表格|表单|表|文档|文件|资料|材料|原文|正文)(?:以外|之外|外)(?:的)?(?:资料|来源|文献|信息|网页|网站|材料|内容|文档|数据)\s*(?:均|都|一律|全部)?\s*(?:不允许|不得|禁止|不能|请勿|勿|不)\s*(?:(?:再|主动|自行|去)\s*){0,4}(?:检索|搜索|查找|查阅|获取|使用|采用|读取|参考|利用|浏览|看|查)/u;
+  // A narrow analysis of supplied contents can be a supplied-only task, but
+  // an independently authorized outside lookup must not be turned off by a
+  // mere “only need to analyze” expression. Explicit source bans still win.
+  const onlyAnalyzeSupplied=/(?<!不必)(?<!无需)(?<!不用)(?<!不要)(?<!并非)(?<!不是)(?<!别)(?:只|仅)(?:需(?:要)?|需要)?\s*(?:分析|统计|汇总|整理|核算|计算|阅读|查看)\s*(?:附件|(?:(?:我|用户)?(?:随附|所附|附上|附带|提供|给定|上传)(?:的)?\s*(?:[\p{L}\p{N}]{0,10}?)?(?:表格|表(?!格)|清单|表单|文档|文件|数据|资料|材料|附件)))(?!(?:的)?(?:格式|样式|版式|模板|大小|名称|路径|属性|文件名|元数据))(?:(?:中|里|内)(?:的)?(?:数字|数据|内容|信息|记录|文字)?|(?:的)?(?:数字|数据|内容|信息|记录|文字))?/u;
+  const onlyAnalyzeSuppliedEnglish=/\b(?:only|solely)\s+(?:(?:need|needs)\s+to\s+)?(?:analy[sz]e|summari[sz]e|inspect)\s+(?:the\s+)?(?:provided|supplied|given|attached|uploaded)\s+(?:[a-z0-9_-]+\s+){0,3}?(?:tables?|spreadsheets?|lists?|documents?|materials?|files?|attachments?)\b(?!['’]s\s+(?:format|layout|style|metadata)\b)/i;
+  const externalAllowance=clauses.some(c=>/(?<!不)(?<!不要)(?<!不能)(?<!不得)(?<!并非)(?<!严禁)(?<!请勿)(?<!无需)(?<!无须)(?<!不必)(?<!不需要)(?<!禁止)(?:允许|可以|可|请)\s*(?:(?:再|也|还|另行|额外|继续|去)\s*){0,3}(?:参考|查阅|搜索|检索|使用|浏览|查看|查找|查询|查)(?:.{0,20}(?:其他|其它|额外|外部|更多|第三方).{0,8}(?:来源|资料|材料|信息|网站|网页|文献|数据)|.{0,8}(?:外网|互联网))/u.test(c)
+    ||/(?<!不)(?<!不要)(?<!不能)(?<!不得)(?<!并非)(?<!严禁)(?<!请勿)(?<!无需)(?<!无须)(?<!不必)(?<!不需要)(?<!禁止)(?:允许|可以|可|请)\s*(?:再|也|还|去)?\s*(?:联网|上网)(?:查证|核验|核实|检索|搜索|查找|查询|补充)?/u.test(c)
+    ||/(?:^|并|同时|然后|再|还|也)\s*(?:请)?\s*(?:联网|上网)(?:查证|核验|核实|检索|搜索|查找|查询|补充)/u.test(c)
+    ||/(?<!not )(?<!never )\b(?:can|may|please|allowed to)\s+(?:also\s+)?(?:search|consult|use|read|research)\b.{0,30}\b(?:other|additional|external|outside)\b.{0,16}\b(?:sources?|materials?|references?|data|information)\b/i.test(c));
+  const providedOnly=localOnly||clauses.some(c=>{
+    if(sourceNegated(c))return false;
+    const direct=sourceDirective(c);
+    const explanatory=/(?:说明|解释|介绍|讨论|描述|讲解|分析|研究|探讨)\s*(?:一下)?\s*(?:为何|为什么|如何)\s*(?:不|勿|不要|请勿)/u.test(direct);
+    const negatedSole=/(?:并非|不是|并不是|不一定是|未必是|不要求).{0,12}(?:全部|所有|唯一|惟一)(?:的)?(?:依据|来源|材料|信息|数据|资料)/u.test(direct)
+      ||/(?:没有说|没说|未说|不认为|不意味着|不代表|不能说).{0,60}(?:上传|提供|给出|附件).{0,30}(?:全部|所有|唯一|惟一)(?:的)?(?:依据|来源|材料|信息|数据|资料)/u.test(direct);
+    const negatedSoleEnglish=/\b(?:never said|did not say|didn't say|do not assume|don't assume|not necessarily|not true)\b.{0,70}\b(?:provided|supplied|given|attached|uploaded)\b.{0,60}\b(?:only|sole|entire)\b/i.test(direct);
+    const negatedLookEnglish=/\b(?:do not|don't|never)\s+(?:(?:only|solely)\s+(?:look at|review|inspect)|(?:look at|review|inspect)\s+(?:only|solely))\b/i.test(direct);
+    const negatedBasisEnglish=/\b(?:do not|don't|never|no need to)\s+(?:(?:use|using)\s+)?(?:only|solely)\s+(?:use\s+)?/i.test(direct);
+    const basisInquiry=/(?:请问|询问).{0,50}(?:只|仅).{0,40}(?:依据|来源|证据|数据源).{0,12}(?:是否|合理|可行|合适|吗|么)/u.test(direct)
+      ||/(?:说明|解释|介绍|讨论|描述|讲解|分析|研究|探讨|评价|评估)\s*(?:一下)?\s*(?:只|仅).{0,50}(?:依据|来源|证据|数据源)(?:的)?(?:含义|概念|做法|合理性|必要性|可行性|利弊|优劣)/u.test(direct)
+      ||/\b(?:is|would|could|should|can)\s+(?:it|using|we)\b.{0,80}\b(?:only|solely)\b.{0,70}\b(?:basis|source|evidence)\b/i.test(direct);
+    const outsideInquiry=/(?:请问|询问|说明|解释|讨论|研究|评价|评估).{0,30}(?:附件|清单|表格|表|文档|资料|材料)(?:以外|之外|外).{0,25}(?:不|不得|禁止|不能|请勿).{0,12}(?:查阅|检索|搜索|使用|读取|获取|参考|查)(?:的)?(?:是否|合理|可行|含义|概念|做法|原因|利弊|必要性|可行性)/u.test(direct);
+    const sourcePatternDirect=externalAllowance?direct.replace(onlyAnalyzeSupplied,' ').replace(onlyAnalyzeSuppliedEnglish,' '):direct;
+    return sourcePattern.test(sourcePatternDirect)||shortExternalBan.test(direct)||onlyLookProvided.test(direct)||(!externalAllowance&&(onlyAnalyzeSupplied.test(direct)||onlyAnalyzeSuppliedEnglish.test(direct)))||(!basisInquiry&&suppliedBasis.test(direct))||(!basisInquiry&&!negatedBasisEnglish&&suppliedBasisEnglish.test(direct))||(!outsideInquiry&&objectOutsideReadBan.test(direct))
+      ||(!negatedLookEnglish&&onlyLookProvidedEnglish.test(direct))
+      ||(!explanatory&&(outsideSourceBan.test(direct)||outsideSourceBanEnglish.test(direct)))
+      ||(!negatedSole&&soleSupplied.test(direct))||(!negatedSoleEnglish&&soleSuppliedEnglish.test(direct));
+  });
   const specifiedSite=clauses.some(c=>!sourceNegated(c)&&specifiedSiteDirective(c));
-  const exactProvided=clauses.some(c=>!sourceNegated(c)&&/(?:只|仅|只能|仅能).{0,10}(?:用|使用|根据|依据).{0,15}(?:提供|给定|给的|所给|附上).{0,12}(?:链接|网址|正文|文本|附件|文档|资料)|\b(?:provided|supplied|given|attached)\s+(?:links?|urls?|text|documents?|notes|materials?|files?|data)\b/i.test(c));
+  const exactProvided=clauses.some(c=>!sourceNegated(c)&&/(?:只|仅|只能|仅能).{0,10}(?:(?<!引)用|使用|根据|依据).{0,15}(?:提供|给定|给的|所给|附上).{0,12}(?:链接|网址|正文|文本|附件|文档|资料)|\b(?:provided|supplied|given|attached)\s+(?:links?|urls?|text|documents?|notes|materials?|files?|data)\b/i.test(c));
   const exactOnlyUrl=clauses.some(c=>{
     if(sourceNegated(c))return false;
     const match=/(?:只|仅|只能|仅能).{0,10}(?:用|使用|访问|查看|阅读).{0,20}USER_SUPPLIED_URL|\b(?:only|solely)\s+(?:use|visit|open|read)\b.{0,25}USER_SUPPLIED_URL/i.exec(c);

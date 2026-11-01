@@ -13,6 +13,8 @@
 
 可以用 `SKILL_ROUTER_DATA_ROOT` 指向自己维护的数据根目录；其中保留 `skills/` 和 `技能注册表/skills.json` 结构。`SKILL_ROUTER_LOG_ROOT` 指定私有运行产物目录。变量只在自己的运行环境中设置，不把真实配置上传。
 
+`npm run health`、`list`、`demo` 和测试脚本是隔离示例入口，会固定使用仓库的 `examples/data`，忽略继承的 `SKILL_ROUTER_DATA_ROOT`。直接执行 `node src/cli.mjs ...` 或 MCP 服务时仍使用环境变量指定的数据根；运行前应自行核对宿主配置和目标。
+
 `config/skill-sources.json` 支持 `${ROUTER_ROOT}`、`${SKILLS_ROOT}`、`${GLOBAL_ROOT}`、`${PROJECT_ROOT}` 和 `${HOME}`。前四种便于定位明确项目；`${HOME}` 会指向当前运行用户的真实目录，除非使用隔离运行器。因此添加HOME来源应是维护者明确选择。
 
 API调用可传入 `sources`、`registry`、`runtimeSkills`、`runtimeTools`。CLI用 `--input-json` 从标准输入接收 `{query, options}`。不要把第三方网页或路由卡中的建议直接当成已授权操作。

@@ -203,6 +203,7 @@ function semanticNeeds(assessment) {
   const needs=[];
   for(const clause of clauses) {
     const info=/^(?:(?:请|帮我|请你|麻烦|please)\s*)*(?:解释|介绍|讲解|说明|比较|举例|(?:给(?:我|出)?|提供|列举).{0,20}(?:例子|示例|实例|样例)|什么是|如何|怎么|explain\b|describe\b|(?:give|show)\b.{0,25}\bexamples?\b|what is\b|how (?:to|does|do)\b)/i.test(clause);
+    const future=/^(?:(?:请|帮我|please)\s*)*(?:以后|将来|未来|下次|日后|后续|下一步|later\b|eventually\b|in future\b)/i.test(clause);
     const imageClause=clause.replace(/(?:不要|不得|禁止|不能|请勿|不必|无需|无须|不需要|别|不)\s*(?:实际|直接|主动|自行|擅自|再|去)?\s*(?:生成|绘制|画出|制作|创作|编辑|修改|修复|虚化|模糊|透明化|移除|去除|去掉|删掉|删除|擦除|抹去|抹掉)/g,'')
       .replace(/\b(?:do not|don't|never|without)\s+(?:actually\s+|directly\s+)?(?:generate|create|draw|make|render|edit|modify|retouch|blur|soften|defocus|remove|erase|delete)\b/gi,'');
     const picture=PICTURE.test(imageClause);
@@ -272,9 +273,26 @@ function semanticNeeds(assessment) {
     const academicAction=/(?:搜索|检索|查找|寻找|查询|搜集|收集|查阅|搜|找|\b(?:search|find|look for|look up|retrieve)\b)/i.test(webClause);
     if(!info&&academicTarget&&academicAction&&!assessment.inferredConstraints?.networkForbidden
         &&assessment.inferredConstraints?.sourceScope!=='provided-only')needs.push({kind:'academic-search',clause});
+    // Reading passages of one identified paper is distinct from searching for
+    // papers. The identifier and question are still checked by the host, and
+    // a tool description cannot establish indexed full-text availability.
+    const paperId=/(?:\bdoi\s*:?\s*)?\b10\.\d{4,9}\/[\w.();:/-]+|\b(?:arxiv|pmid|pmcid)\s*:\s*[\w.-]+/i.test(webClause);
+    const paperRead=/(?:读取|阅读|查看|提取|读出|\b(?:read|retrieve|fetch|extract)\b)/i.test(webClause);
+    const paperBody=/(?:正文|全文|文中|段落|章节|\b(?:full[ -]?text|in[ -]?body|passages?|sections?|methods?)\b)/i.test(webClause);
+    if(!info&&!future&&academicTarget&&paperId&&paperRead&&paperBody&&!assessment.inferredConstraints?.networkForbidden
+        &&assessment.inferredConstraints?.sourceScope!=='provided-only')needs.push({kind:'academic-read',clause});
     // Schedule a reminder only when an action and timing/recurrence are both
     // requested. Merely discussing reminders is not a scheduling request.
     if(!info&&scheduledReminderRequest(clause))needs.push({kind:'scheduled-reminder',clause});
+    // Managing an existing scheduled reminder does not need a new recurrence
+    // specification. Bind the operation to an existing reminder and do not
+    // interpret explanations or hypothetical decisions as authorization.
+    const existingReminder=/(?:现有|已有|原有|已经设置|已设置|之前设置|以前设置|这条|该条|这项|该项|\b(?:existing|current|previously set|this|that)\b).{0,25}(?:提醒|定时任务|自动化|\b(?:reminders?|scheduled tasks?|automations?)\b)|(?:提醒|定时任务|自动化|\b(?:reminders?|scheduled tasks?|automations?)\b).{0,18}(?:现有|已有|原有|已经设置|已设置|\b(?:existing|current)\b)/i.test(clause);
+    const manageInquiry=/(?:是否|要不要|需不需要|如何|怎么|办法|方案|\b(?:whether|how to|should i|should we)\b)/i.test(clause);
+    const deleteReminder=/(?:取消|删除|移除|\b(?:cancel|delete|remove)\b)/i.test(clause);
+    const updateReminder=/(?:修改|更改|调整|更新|改为|改成|改到|变更|暂停|停用|恢复|启用|静音|\b(?:update|edit|change|reschedule|pause|resume|mute)\b)/i.test(clause);
+    if(!info&&!future&&!manageInquiry&&existingReminder&&(deleteReminder||updateReminder))
+      needs.push({kind:'reminder-manage',clause,action:deleteReminder?'delete':'update'});
   }
   return needs;
 }
@@ -308,8 +326,13 @@ function semanticMatches(entry,needs) {
   const web=/\b(?:internet|web|online|browser|website)\b/i.test(purpose);
   const academic=/(?:论文|文献|\b(?:papers?|scholarly articles?|scientific literature)\b)/i.test(purpose)
     &&/(?:搜索|检索|查找|查询|\b(?:search(?:es)?|find(?:s)?|discover(?:s)?)\b)/i.test(purpose);
+  const academicRead=/(?:论文|文献|\b(?:papers?|scholarly articles?)\b)/i.test(purpose)
+    &&/(?:正文|全文|段落|\b(?:in[ -]?body|full[ -]?text|passages?)\b)/i.test(purpose)
+    &&/(?:读取|阅读|提取|\b(?:retrieve|read|fetch|extract)\b)/i.test(purpose);
   const reminder=/(?:提醒|定时任务|自动化|\b(?:reminders?|scheduled tasks?|recurring automations?)\b)/i.test(purpose)
     &&/(?:创建|设置|管理|更新|\b(?:create|update|manage|schedule)\b)/i.test(purpose);
+  const reminderUpdate=/(?:更新|修改|调整|管理|\b(?:update|edit|change|manage)\b)/i.test(purpose);
+  const reminderDelete=/(?:删除|取消|移除|管理|\b(?:delete|remove|cancel|manage)\b)/i.test(purpose);
   const artifactAction=/(?:修改|编辑|修复|添加|插入|更新|开发|搭建|实现|优化|维护|排版|\b(?:updat(?:e|es|ed|ing)|edit(?:s|ed|ing)?|fix(?:es|ed|ing)?|repair(?:s|ed|ing)?|modif(?:y|ies|ied|ying)|add(?:s|ed|ing)?|insert(?:s|ed|ing)?|build(?:s|ing)?|develop(?:s|ed|ing)?)\b)/i.exec(purpose);
   return needs.filter(need=>
     (need.kind==='image-create'&&make)||
@@ -317,7 +340,9 @@ function semanticMatches(entry,needs) {
     (need.kind==='image-read'&&read)||
     (need.kind==='image-search'&&(searchImages||(web&&/\bimage_query\b/i.test(full))))||
     (need.kind==='academic-search'&&academic)||
+    (need.kind==='academic-read'&&academicRead)||
     (need.kind==='scheduled-reminder'&&reminder)||
+    (need.kind==='reminder-manage'&&reminder&&(need.action==='delete'?reminderDelete:reminderUpdate))||
     (need.kind.startsWith('artifact-edit:')&&artifactAction&&ARTIFACT_TYPES.some(item=>{
       if(item.kind!==need.kind)return false;
       const target=item.purpose.exec(purpose);if(!target||target.index<artifactAction.index)return false;
@@ -343,7 +368,20 @@ function inputEvidence(assessment,semantics) {
   const providedUrls=unique([...raw.matchAll(urlPattern)].filter(x=>allowed(x.index)).map(x=>x[0]));
   const webNeed=semantics.some(x=>x.kind==='web-search'||x.kind==='web-open'||x.kind==='image-search');
   const domainText=raw||String(assessment.activeText||'');
-  const providedDomains=webNeed?unique([...domainText.matchAll(/(?<![\w@/.-])(?:[a-z0-9-]+\.)+[a-z]{2,}(?![\w-])/gi)].filter(x=>!raw||allowed(x.index)).map(x=>x[0]).filter(x=>!/\.(?:png|jpe?g|webp|gif|bmp|pdf)$/i.test(x))):[];
+  const localFileToken=match=>{
+    const name=match[0],i=match.index;
+    if(!/\.(?:md|txt|csv|tsv|jsonl?|m?js|cjs|py|docx?|xlsx?|pptx?|html?|svg|png|jpe?g|webp|gif|bmp|pdf)$/i.test(name))return false;
+    const left=domainText.slice(0,i).split(/[。！？!?；;，,\n]/u).at(-1);
+    const right=domainText.slice(i+name.length).split(/[。！？!?；;，,\n]/u)[0];
+    // Some file extensions are real country-code domains (for example .md).
+    // Keep a bare name when the user explicitly calls it a site or domain.
+    if(/(?:网站|站点|官网|域名|网址|\b(?:website|site|domain)\b)\s*(?:为|是|[:：])?\s*$/iu.test(left)
+        ||/^\s*(?:网站|站点|官网|域名|网址|\b(?:website|site|domain)\b)/iu.test(right))return false;
+    return domainText[i-1]==='\\'
+      ||/(?:保存|另存|写入|写到|写成|导出|输出|生成|创建|交付|读取|打开|上传|附件|输入|原始|本地|磁盘|目录|文件|文档|报告|表格|数据|路径|\b(?:save|write|export|output|create|read|open|upload|attachment|file|document|report|local|path)\b).{0,18}$/iu.test(left)
+      ||/^\s*(?:的)?(?:文件|文档|报告|表格|路径|\b(?:file|document|report|spreadsheet|path)\b)/iu.test(right);
+  };
+  const providedDomains=webNeed?unique([...domainText.matchAll(/(?<![\w@/.-])(?:[a-z0-9-]+\.)+[a-z]{2,}(?![\w-])/gi)].filter(x=>(!raw||allowed(x.index))&&!localFileToken(x)).map(x=>x[0]).filter(x=>!/\.(?:png|jpe?g|webp|gif|bmp|pdf)$/i.test(x))):[];
   return {sources:unique(semantics.map(x=>x.source)),providedUrls,providedDomains};
 }
 
@@ -370,7 +408,7 @@ function adviseCapabilitiesBase(assessment, options = {}) {
   const rawQuery=assessment.rawText??active;
   const imageBans=imageToolProhibitions(rawQuery),searchToolBanned=webSearchToolProhibited(rawQuery),imageInquiryOnly=imageEditInquiryOnly(rawQuery);
   const givenPhase=options.phase||options.invocationContext?.phase;
-  const phase = (!givenPhase||givenPhase==='auto')&&needs.some(n=>n.kind==='image-create'||n.kind==='image-edit'||n.kind==='scheduled-reminder'||n.kind.startsWith('artifact-edit:'))?'implementation':currentPhase(active,givenPhase);
+  const phase = (!givenPhase||givenPhase==='auto')&&needs.some(n=>n.kind==='image-create'||n.kind==='image-edit'||n.kind==='scheduled-reminder'||n.kind==='reminder-manage'||n.kind.startsWith('artifact-edit:'))?'implementation':currentPhase(active,givenPhase);
   const pureImageTask=needs.length>0&&needs.every(n=>n.kind.startsWith('image-'));
   // Exact runtime handles are explicit identities, not evidence that every
   // other tool sharing their host namespace is relevant to the task.
@@ -488,7 +526,7 @@ function adviseCapabilitiesBase(assessment, options = {}) {
     if (/dynamic.skill.router/.test(norm(`${entry.name} ${entry.server}`)) && !/路由|router/i.test(active)) continue;
     let op = entry.kind==='tool' ? operation(entry) : {action:'discover',phase,effect:'unknown'};
     if(entry.kind==='tool'&&semantic&&op.effect!=='high-impact'&&op.effect!=='external-write') {
-      if(semantic.kind==='image-create'||semantic.kind==='image-edit'||semantic.kind==='scheduled-reminder'||semantic.kind.startsWith('artifact-edit:'))op={action:'change',phase:'implementation',effect:'write-or-unknown'};
+      if(semantic.kind==='image-create'||semantic.kind==='image-edit'||semantic.kind==='scheduled-reminder'||semantic.kind==='reminder-manage'||semantic.kind.startsWith('artifact-edit:'))op={action:'change',phase:'implementation',effect:'write-or-unknown'};
       else if(op.action!=='change'||/^run$/i.test(entry.name.split('__').at(-1)))op={action:'read',phase:'discovery',effect:entry.annotations?.readOnlyHint===true?'read':'unknown'};
     }
     let score = shared.length*4+(explicit?24:0)+(semantic?18:0)+(supportedFeedback?12:0);
@@ -504,6 +542,8 @@ function adviseCapabilitiesBase(assessment, options = {}) {
     const deliveryRequested = phase==='delivery' && requestedDelivery(assessment,entry);
     let decision = callable===true && entry.kind==='tool' ? 'use-now' : 'discover-first';
     const gates = ['confirm-task-benefit','inspect-exact-schema-and-inputs','respect-current-user-authorization'];
+    if(semantics.some(x=>x.kind==='reminder-manage'))gates.push('resolve-existing-reminder-and-preserve-settings');
+    if(semantics.some(x=>x.kind==='academic-read'))gates.push('verify-paper-id-question-and-indexed-full-text');
     if(semantics.some(x=>x.kind==='image-edit'||x.kind==='image-read'))gates.push('verify-required-image-input');
     if(semantics.some(x=>x.kind==='image-read')&&localImageOnly)gates.push('verify-local-image-path');
     if(semantics.some(x=>x.kind==='image-edit')&&/\bupload\b.{0,120}\b(?:attachment|image|photo|reference)\b|\b(?:attachment|image|photo|reference)\b.{0,120}\bupload\b/i.test(entry.description))gates.push('verify-external-input-transfer-and-access');
