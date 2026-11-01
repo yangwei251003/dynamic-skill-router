@@ -1,6 +1,6 @@
 {
   "name": "yangwei-dynamic-skill-router",
-  "version": "4.3.5",
+  "version": "4.3.6",
   "private": true,
   "type": "module",
   "description": "面向多种 AI Agent 的本地动态技能路由器",
@@ -14,7 +14,7 @@
     "test": "node scripts/isolated-node.mjs --test tests/discovery-v4.test.mjs tests/advisor-v4.test.mjs tests/capabilities-v4.test.mjs tests/capabilities-quality.test.mjs tests/capabilities-mcp.test.mjs tests/recovery-v4.test.mjs tests/recovery-mcp.test.mjs tests/research-hardening.test.mjs tests/revision-v4.test.mjs tests/v4-integration.test.mjs tests/host-v4.test.mjs tests/hook-resilience.test.mjs tests/plugin-mentions.test.mjs",
     "mcp": "node src/mcp-server.mjs",
     "test:v421": "node scripts/isolated-node.mjs --test tests/local-upgrade-v421.test.mjs",
-    "test:v43": "node scripts/isolated-node.mjs --test tests/request-evidence-v43.test.mjs tests/capability-intents-v43.test.mjs tests/readonly-intent-v43.test.mjs tests/scope-v431.test.mjs tests/request-boundaries-v432.test.mjs tests/v433-public.test.mjs tests/v434-public.test.mjs tests/v435-public.test.mjs"
+    "test:v43": "node scripts/isolated-node.mjs --test tests/request-evidence-v43.test.mjs tests/capability-intents-v43.test.mjs tests/readonly-intent-v43.test.mjs tests/scope-v431.test.mjs tests/request-boundaries-v432.test.mjs tests/v433-public.test.mjs tests/v434-public.test.mjs tests/v435-public.test.mjs tests/v436-public.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.0.0",
