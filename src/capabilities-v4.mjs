@@ -1,6 +1,6 @@
 import {validateHostOptions,exactToolConsultations} from './host-context-contract.mjs';
-import {invocationConstraints,constrainCapability} from './invocation-constraints.mjs';
-import {requestSegments,negativeDirective,exactToolProhibited,imageObjectRemovalInquiry,imageEditInquiry,imageEditInquiryOnly,imageToolProhibitions,imageToolPurposes,webSearchToolProhibited,webSearchToolPurpose} from './request-evidence.mjs';
+import {invocationConstraints,constrainCapability,prohibitedObjectOperation} from './invocation-constraints.mjs';
+import {requestSegments,negativeDirective,scheduledReminderRequest,exactToolProhibited,imageObjectRemovalInquiry,imageEditInquiry,imageEditInquiryOnly,imageToolProhibitions,imageToolPurposes,webSearchToolProhibited,webSearchToolPurpose} from './request-evidence.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -146,6 +146,7 @@ function terms(value) {
     [/测试|test|验证|verify|validation/,['test']], [/部署|上线|发布|deploy|publish/,['deploy']],
     [/幻灯片|演示文稿|slides|presentation/,['slides']], [/表格|spreadsheet|excel/,['spreadsheet']],
     [/邮件|email|mail/,['email']], [/日历|calendar/,['calendar']], [/图像|图片|照片|插画|海报|image|photo|illustration|poster/,['image']],
+    [/家长控制|parental controls?/,['parental','control']], [/家庭设置|family settings?/,['family','setting']],
     [/迁移|migration/,['migration']], [/日志|logs/,['logs']], [/错误|error|故障|debug/,['debug']],
   ];
   for (const [pattern, additions] of bridges) if (pattern.test(source)) result.push(...additions);
@@ -265,6 +266,15 @@ function semanticNeeds(assessment) {
       ||(!info&&/(?:网页|网址|网站|链接|页面|\b(?:page|url|link|website)\b|https?:\/\/[^\s<>"，。！？、；）)]+).{0,45}(?:阅读|读取|读出|浏览|打开|查看|访问|\b(?:read|open|browse|visit|fetch)\b)/i.test(webClause));
     if(search)needs.push({kind:'web-search',clause});
     if(open)needs.push({kind:'web-open',clause});
+    // A literature request needs an actual search action; merely mentioning a
+    // paper or asking for an explanation does not authorize remote retrieval.
+    const academicTarget=/(?:论文|文献|期刊文章|学术文章|学术研究|\b(?:papers?|scholarly articles?|scientific literature)\b)/i.test(webClause);
+    const academicAction=/(?:搜索|检索|查找|寻找|查询|搜集|收集|查阅|搜|找|\b(?:search|find|look for|look up|retrieve)\b)/i.test(webClause);
+    if(!info&&academicTarget&&academicAction&&!assessment.inferredConstraints?.networkForbidden
+        &&assessment.inferredConstraints?.sourceScope!=='provided-only')needs.push({kind:'academic-search',clause});
+    // Schedule a reminder only when an action and timing/recurrence are both
+    // requested. Merely discussing reminders is not a scheduling request.
+    if(!info&&scheduledReminderRequest(clause))needs.push({kind:'scheduled-reminder',clause});
   }
   return needs;
 }
@@ -296,12 +306,18 @@ function semanticMatches(entry,needs) {
   const read=imageAction(purpose,'(?:view(?:s|ed|ing)?|read(?:s|ing)?|inspect(?:s|ed|ing)?|examine(?:s|d)?|analy[sz](?:e|es|ed|ing)|recogniz(?:e|es|ed|ing))','(?:viewing|inspection|analysis)')||/(?:查看|读取|识别|分析)(?:本地的?|已有的?|指定的|上传的)?(?:图片|图像|照片)/.test(purpose);
   const searchImages=imageAction(purpose,'(?:search(?:es|ed|ing)?|find(?:s|ing)?)','(?:search|retrieval)')||/(?:搜索|检索|查找)(?:网络|在线|网页)?(?:图片|图像|照片|插画)/.test(purpose);
   const web=/\b(?:internet|web|online|browser|website)\b/i.test(purpose);
+  const academic=/(?:论文|文献|\b(?:papers?|scholarly articles?|scientific literature)\b)/i.test(purpose)
+    &&/(?:搜索|检索|查找|查询|\b(?:search(?:es)?|find(?:s)?|discover(?:s)?)\b)/i.test(purpose);
+  const reminder=/(?:提醒|定时任务|自动化|\b(?:reminders?|scheduled tasks?|recurring automations?)\b)/i.test(purpose)
+    &&/(?:创建|设置|管理|更新|\b(?:create|update|manage|schedule)\b)/i.test(purpose);
   const artifactAction=/(?:修改|编辑|修复|添加|插入|更新|开发|搭建|实现|优化|维护|排版|\b(?:updat(?:e|es|ed|ing)|edit(?:s|ed|ing)?|fix(?:es|ed|ing)?|repair(?:s|ed|ing)?|modif(?:y|ies|ied|ying)|add(?:s|ed|ing)?|insert(?:s|ed|ing)?|build(?:s|ing)?|develop(?:s|ed|ing)?)\b)/i.exec(purpose);
   return needs.filter(need=>
     (need.kind==='image-create'&&make)||
     (need.kind==='image-edit'&&edit)||
     (need.kind==='image-read'&&read)||
     (need.kind==='image-search'&&(searchImages||(web&&/\bimage_query\b/i.test(full))))||
+    (need.kind==='academic-search'&&academic)||
+    (need.kind==='scheduled-reminder'&&reminder)||
     (need.kind.startsWith('artifact-edit:')&&artifactAction&&ARTIFACT_TYPES.some(item=>{
       if(item.kind!==need.kind)return false;
       const target=item.purpose.exec(purpose);if(!target||target.index<artifactAction.index)return false;
@@ -354,9 +370,16 @@ function adviseCapabilitiesBase(assessment, options = {}) {
   const rawQuery=assessment.rawText??active;
   const imageBans=imageToolProhibitions(rawQuery),searchToolBanned=webSearchToolProhibited(rawQuery),imageInquiryOnly=imageEditInquiryOnly(rawQuery);
   const givenPhase=options.phase||options.invocationContext?.phase;
-  const phase = (!givenPhase||givenPhase==='auto')&&needs.some(n=>n.kind==='image-create'||n.kind==='image-edit'||n.kind.startsWith('artifact-edit:'))?'implementation':currentPhase(active,givenPhase);
+  const phase = (!givenPhase||givenPhase==='auto')&&needs.some(n=>n.kind==='image-create'||n.kind==='image-edit'||n.kind==='scheduled-reminder'||n.kind.startsWith('artifact-edit:'))?'implementation':currentPhase(active,givenPhase);
   const pureImageTask=needs.length>0&&needs.every(n=>n.kind.startsWith('image-'));
-  const queryTerms = new Set(terms(active));
+  // Exact runtime handles are explicit identities, not evidence that every
+  // other tool sharing their host namespace is relevant to the task.
+  let lexicalActive=active;
+  if(active.includes('__'))for(const entry of inventory.capabilities)if(entry.kind==='tool'&&typeof entry.name==='string'&&entry.name.includes('__')) {
+    const escaped=entry.name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    lexicalActive=lexicalActive.replace(new RegExp(`(?<![a-z0-9_-])${escaped}(?![a-z0-9_-])`,'gi'),' ');
+  }
+  const queryTerms = new Set(terms(lexicalActive));
   const normalizedActive=label(active);
   const providerKey=value=>label(String(value||'').split('@')[0]);
   const namedProviders=new Set(inventory.capabilities.filter(e=>e.kind==='plugin'||e.kind==='mcp').flatMap(e=>[e.name,e.displayName,e.plugin]).filter(x=>x&&providerKey(x).length>2&&(`-${normalizedActive}-`).includes(`-${providerKey(x)}-`)).map(providerKey));
@@ -379,6 +402,7 @@ function adviseCapabilitiesBase(assessment, options = {}) {
   for (const entry of inventory.capabilities) {
     if (!entry.enabled) continue;
     if (entry.kind==='tool' && exactToolProhibited(assessment.rawText??assessment.activeText,entry.name)) continue;
+    if (entry.kind==='tool' && prohibitedObjectOperation(assessment.rawText??assessment.activeText,entry)) continue;
     if (entry.kind==='tool' && searchToolBanned && webSearchToolPurpose(entry.description,entry.name)) continue;
     const runtimeRecord=entry.kind==='tool'?(options.runtimeTools||[]).find(t=>t.name===entry.name):null;
     if(runtimeRecord?.available===false)continue;
@@ -403,6 +427,30 @@ function adviseCapabilitiesBase(assessment, options = {}) {
       const escaped=String(x).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
       return new RegExp(`(?:\\$|使用\\s*|调用\\s*|用\\s*|use\\s+|invoke\\s+)${escaped}(?=$|[^a-z0-9_-])`,'i').test(active);
     });
+    // A safety column in local data is not evidence of a family account or
+    // parental-controls task. Explicit tool names retain their normal gates.
+    const familyTool=entry.kind==='tool'&&/(?:^|__)safety_settings_/i.test(entry.name);
+    const familyObject=/(?:家长|家庭设置|家庭成员|子女|孩子|儿童|未成年|青少年|监护|可信联系人|\b(?:parental|family|children|child|teen|guardian|trusted contact)\b)/i.test(active);
+    if(familyTool&&!explicit&&!familyObject)continue;
+    // A data field called quality_feedback is not a request to submit
+    // feedback on a search job. Bind that specialized tool to its object.
+    const searchFeedbackTool=entry.kind==='tool'&&/(?:^|_)feedback(?:_|$)/i.test(entry.name)
+      &&/\bfeedback\b/i.test(purpose)&&/\b(?:search|job|result)\b/i.test(purpose);
+    const feedbackObject=/(?:反馈|评价|打分|评分|\b(?:feedback|rating|rate)\b)/i.test(active);
+    const feedbackAction=/(?:提交|发送|提供|给出|评价|反馈|打分|评分|\b(?:submit|send|give|provide|rate|feedback)\b)/i.test(active);
+    const searchObject=/(?:搜索|检索|网页|爬取|检索结果|\b(?:firecrawl|search|crawl|research|job)\b)/i.test(active);
+    if(searchFeedbackTool&&!explicit&&!(feedbackObject&&feedbackAction&&searchObject))continue;
+    const supportedFeedback=searchFeedbackTool&&feedbackObject&&feedbackAction&&searchObject;
+    // A locally requested report does not imply creating, uploading or sharing
+    // a file in a remote drive. Other independently requested remote actions
+    // and explicitly named tools still go through their ordinary scope gates.
+    const localReport=/(?:编写|撰写|写|生成|制作|输出|保存|导出|交付|创建).{0,12}(?:本地|本机|电脑|磁盘).{0,16}(?:报告|文档|文件|表格)|在(?:本地|本机|电脑|磁盘).{0,10}(?:编写|撰写|写|生成|制作|输出|保存|导出|交付|创建).{0,16}(?:报告|文档|文件|表格)/i.test(active);
+    const remoteFileProvider=entry.kind==='tool'&&/(?:google_drive|onedrive|dropbox|feishu_drive|lark_drive|notion)/i.test([entry.name,entry.server,entry.plugin].join(' '));
+    const remoteFileMutation=remoteFileProvider&&/\b(?:create|write|update|share|upload|copy|move|delete|publish)\b/i.test(entry.name.split('__').at(-1).replace(/[_-]+/g,' '));
+    const remoteReference=/(?:云端|网盘|云盘|google\s*drive|onedrive|dropbox|notion|飞书云文档)/i.test(active);
+    const remoteDestination=/(?:上传|保存|写入|分享|共享|发布|同步|转存|创建).{0,30}(?:云端|网盘|云盘|google\s*drive|onedrive|dropbox|notion|飞书云文档)|(?:云端|网盘|云盘|google\s*drive|onedrive|dropbox|notion|飞书云文档).{0,30}(?:上传|保存|写入|分享|共享|发布|同步|转存|创建)/i.test(active);
+    if(localReport&&remoteFileProvider&&!remoteReference&&!explicit)continue;
+    if(localReport&&remoteFileMutation&&!remoteDestination&&!explicit)continue;
     const editPurposeMissing=imagePurpose.create&&!imagePurpose.edit&&needs.some(n=>n.kind==='image-edit')&&!needs.some(n=>n.kind==='image-create')&&!semantics.some(n=>!n.kind.startsWith('image-'));
     if(editPurposeMissing&&!explicit)continue;
     const uncertainImagePurpose=(imageBans.create||imageBans.edit)&&!imagePurpose.create&&!imagePurpose.edit&&explicit
@@ -429,7 +477,8 @@ function adviseCapabilitiesBase(assessment, options = {}) {
       if(!independentlyMatched)continue;
     }
     // One generic domain match is insufficient to add tools to an otherwise native task.
-    if (!explicit && shared.length<2 && !semantic) continue;
+    const support=shared.filter(term=>term!=='id');
+    if (!explicit && support.length<2 && !semantic && !supportedFeedback) continue;
     const brandTerms=new Set(terms(`${entry.plugin||''} ${entry.server||''}`));
     const nonBrand=shared.filter(x=>!brandTerms.has(x));
     if(entry.kind==='tool'&&!explicit&&entry.plugin&&nonBrand.length===0)continue;
@@ -439,10 +488,10 @@ function adviseCapabilitiesBase(assessment, options = {}) {
     if (/dynamic.skill.router/.test(norm(`${entry.name} ${entry.server}`)) && !/路由|router/i.test(active)) continue;
     let op = entry.kind==='tool' ? operation(entry) : {action:'discover',phase,effect:'unknown'};
     if(entry.kind==='tool'&&semantic&&op.effect!=='high-impact'&&op.effect!=='external-write') {
-      if(semantic.kind==='image-create'||semantic.kind==='image-edit'||semantic.kind.startsWith('artifact-edit:'))op={action:'change',phase:'implementation',effect:'write-or-unknown'};
+      if(semantic.kind==='image-create'||semantic.kind==='image-edit'||semantic.kind==='scheduled-reminder'||semantic.kind.startsWith('artifact-edit:'))op={action:'change',phase:'implementation',effect:'write-or-unknown'};
       else if(op.action!=='change'||/^run$/i.test(entry.name.split('__').at(-1)))op={action:'read',phase:'discovery',effect:entry.annotations?.readOnlyHint===true?'read':'unknown'};
     }
-    let score = shared.length*4+(explicit?24:0)+(semantic?18:0);
+    let score = shared.length*4+(explicit?24:0)+(semantic?18:0)+(supportedFeedback?12:0);
     const nameTerms=terms(entry.name.split('__').at(-1));
     score+=nameTerms.filter(x=>queryTerms.has(x)&&!brandTerms.has(x)).length*8;
     if(op.action==='read'&&wantsRead)score+=10;

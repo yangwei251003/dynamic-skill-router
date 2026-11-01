@@ -1,4 +1,4 @@
-import {invocationConstraints,constrainCapability} from './invocation-constraints.mjs';
+import {invocationConstraints,constrainCapability,prohibitedObjectOperation} from './invocation-constraints.mjs';
 import {requestSegments,exactToolProhibited,imageToolProhibitions,imageToolPurposes,imageEditInquiryOnly,webSearchToolProhibited,webSearchToolPurpose} from './request-evidence.mjs';
 export function validateHostOptions(options={}) {
   const context=options.taskContext;
@@ -18,7 +18,7 @@ export function exactToolConsultations(query,assessment,options={}) {
   for(const request of options.taskContext?.capabilityRequests??[]){
     if(!request.evidenceRefs.every(ref=>String(query).includes(ref)&&String(assessment.activeText??'').includes(ref)))continue;
     for(const name of request.toolNames){
-      const tool=(options.runtimeTools??[]).find(t=>t?.name===name);if(!tool||tool.available===false||seen.has(name)||exactToolProhibited(query,name))continue;seen.add(name);
+      const tool=(options.runtimeTools??[]).find(t=>t?.name===name);if(!tool||tool.available===false||seen.has(name)||exactToolProhibited(query,name)||prohibitedObjectOperation(query,tool))continue;seen.add(name);
       if(searchToolBanned&&webSearchToolPurpose(tool.description,name))continue;
       const imagePurpose=imageToolPurposes(tool.description);
       if((imageBans.create&&imagePurpose.create)||(imageBans.edit&&imagePurpose.edit))continue;

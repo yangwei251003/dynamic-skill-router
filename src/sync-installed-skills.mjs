@@ -231,6 +231,15 @@ function normalizeGovernanceFields(skill) {
   };
 }
 
+// The personal dashboard generator is intentionally absent from the public
+// repository. Keep its original invocation when an installation supplies it.
+export function runOptionalDashboard({sourceDir = path.dirname(fileURLToPath(import.meta.url)), exists = fs.existsSync, run = execFileSync} = {}) {
+  const script = path.join(sourceDir, 'generate-dashboard.mjs');
+  if (!exists(script)) return false;
+  run(process.execPath, [script], {stdio: ['ignore', 'ignore', 'pipe']});
+  return true;
+}
+
 export function synchronizeInstalledSkills({generateDashboard = true} = {}) {
   const lock = acquireSyncLock();
   if (lock == null) return {timestamp: new Date().toISOString(), skipped: true, reason: '另一个同步进程正在运行'};
@@ -303,7 +312,7 @@ export function synchronizeInstalledSkills({generateDashboard = true} = {}) {
   writeJsonAtomic(statePath, result);
 
   if (generateDashboard) {
-    execFileSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), 'generate-dashboard.mjs')], {stdio: ['ignore', 'ignore', 'pipe']});
+    runOptionalDashboard();
   }
   return result;
   } finally {

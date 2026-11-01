@@ -23,3 +23,4 @@ jobs:
       - run: npm run test:v421
       - run: npm run test:v43
       - run: npm run test:v439
+      - run: npm run test:v4310

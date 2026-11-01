@@ -70,7 +70,7 @@ const genericHan = new Set('开始 结束 使用 制作 创建 生成 编辑 修
 const genericLatin = new Set('input output index file files page pages content task user local online offline create edit modify start stop run use used using show support result results format simple small one two'.split(' '));
 // Common actions, quantity words and output labels are useful for recall,
 // but a coincidence of several of them is not an independent task object.
-const weakEvidenceHan = new Set('改进 测试 更新 最新 清楚 提出 一份 客户 开发 本地 系统 完整 报告 统计 区间 比较 包含 记录 数量 顺序 说明 情况 主要 相关 分析 安装 优先 时间 原始 其他'.split(' '));
+const weakEvidenceHan = new Set('改进 测试 更新 最新 清楚 提出 一份 客户 开发 本地 系统 完整 报告 统计 区间 比较 包含 记录 数量 顺序 说明 情况 主要 相关 分析 安装 优先 时间 原始 其他 复核 如果 同时 组合'.split(' '));
 const weakEvidenceLatin = new Set('category share count percent total latest update test testing report local system customer develop complete describe compare summary analysis statistics'.split(' '));
 // Generic product suffixes do not identify a provider when qualified by a
 // distinct proper name (for example, "Example Drive"). The prefix remains
@@ -164,6 +164,23 @@ function capabilityHasTaskObject(capability, text, skill, clauses) {
     return /数学(?:模型|建模|优化)|运筹|目标函数|约束条件|(?:线性|整数|混合整数)规划|(?:最小化|最大化).{0,15}(?:成本|利润|收益)|(?:优化|设计).{0,12}(?:库存策略|补货策略|订货策略)|operations research|optimization model|linear programming/i.test(text);
   return true;
 }
+
+// Cost, benefit and a "combination" also describe engineering projects.
+// A finance specialist needs evidence of a finance object unless the user
+// explicitly names that skill; generic project terms may still rank other
+// applicable capabilities normally.
+function financeSpecialistWithoutObject(skill,text) {
+  const identity=[skill.id,skill.nameZh,skill.name,...list(skill.aliases)].filter(Boolean).join(' ');
+  const stockSpecialist=/(?:^|[^a-z])(?:stock|equity)(?:$|[^a-z])|(?:股票|证券)(?:分析|研究|评估)/i.test(identity);
+  const financeSpecialist=stockSpecialist||/(?:^|[^a-z])(?:financial|finance|investments?)(?:$|[^a-z])|(?:金融|财务|投资)(?:分析|研究|评估)/i.test(identity);
+  if(!financeSpecialist)return false;
+  const stockObject=/(?:股票|股价|证券|股市|基金|期货|债券|外汇|持仓|股息|a股|\b(?:stocks?|shares?|equities|equity|securities|funds?|bonds?|dividends?)\b)/i.test(text);
+  if(stockSpecialist)return !stockObject;
+  const financeObject=stockObject||/(?:金融|财务|投资|估值|上市公司|年报|财报|季报|现金流|资产负债|利率|资本市场|\b(?:finance|financials?|investments?|valuation|earnings|cash flow|balance sheet|interest rates?)\b)/i.test(text);
+  const businessFinance=/(?:公司|企业|银行|\b(?:company|business|corporation|bank)\b)/i.test(text)
+    &&/(?:盈利|营收|利润|回报率|\b(?:profit|revenue|roi)\b)/i.test(text);
+  return !(financeObject||businessFinance);
+}
 function independentDescriptionHits(hits, retrieval, document) {
   // When segmentation is unavailable, preserve prior routing behavior rather
   // than asserting a word boundary or suppressing a potentially useful skill.
@@ -234,7 +251,17 @@ function concreteTaskSupport(skill,capability,assessment) {
     ||/(?:纵向|历时|历史|演进|演变|发展|生命周期)/i.test(active)&&/(?:横向|同类|竞品|比较|对比)/i.test(active)
       &&/(?:分析|研究|调研|比较|对比)/i.test(active)&&/(?:产品|公司|技术|概念|人物|机构|行业|模式|平台|政策|服务|\b(?:product|company|technology|industry|policy|person)\b)/i.test(active);
   const researchManual=/(?:hv[-_]analysis|横纵分析|纵横分析)/i.test(identity+' '+purpose.slice(0,250));
-  return {skill:skillTask&&skillManual,codeTest:testTask&&testManual&&!testLanguageMismatch&&!testFrameworkMismatch,docx:docTask&&docManual,data:dataTask&&dataManual,research:researchTask&&researchManual,testLanguageMismatch,testFrameworkMismatch};
+  const stockTask=/(?:股票|股价|个股|证券|股市|a股|\b(?:stocks?|shares?|equities|equity|securities)\b)/i.test(active)
+    &&/(?:分析|研究|评估|比较|对比|估值|研判|\b(?:analy[sz]e|research|assess|compare|valuation)\b)/i.test(active);
+  const stockManual=/(?:^|[^a-z])stock[-_ ](?:analysis|analyst)(?:$|[^a-z])|(?:股票|证券)(?:分析|研究|评估)/i.test(identity)
+    &&/(?:股票|证券|\b(?:stock|shares?|equity|securities)\b)/i.test(purpose);
+  const aShareOnly=/(?:^|[^a-z])a[-_ ]stock(?:$|[^a-z])/i.test(identity)
+    &&!/(?:a股|沪深|上证|深证|上海证券|深圳证券|\b(?:chinese|china)\s+(?:stocks?|equities|shares?)\b)/i.test(active);
+  const financeTask=/(?:财务|财报|年报|现金流|资产负债|\b(?:financial statements?|financial performance|cash flow|balance sheet)\b)/i.test(active)
+    &&/(?:分析|研究|评估|比较|对比|估值|\b(?:analy[sz]e|research|assess|compare|valuation)\b)/i.test(active);
+  const financeManual=/(?:^|[^a-z])(?:financial|finance)[-_ ](?:suite|analysis|analyst)(?:$|[^a-z])|财务(?:分析|研究|评估)/i.test(identity)
+    &&/(?:财务|财报|\b(?:financial|finance|cash flow)\b)/i.test(purpose);
+  return {skill:skillTask&&skillManual,codeTest:testTask&&testManual&&!testLanguageMismatch&&!testFrameworkMismatch,docx:docTask&&docManual,data:dataTask&&dataManual,research:researchTask&&researchManual,stock:stockTask&&stockManual&&!aShareOnly,finance:financeTask&&financeManual,testLanguageMismatch,testFrameworkMismatch};
 }
 
 function retrievalTerms(text, experimental = false) {
@@ -354,7 +381,7 @@ function queryClauses(query) {
     // A prohibition may be followed by an independent read-only goal without
     // punctuation. Do not split attributive constraints such as 无需联网的.
     .flatMap(value => /(?:不要|不得|禁止|严禁|请勿|禁用|不使用|不用|不调用|不采用|不执行|(?<![分识辨区判鉴])别用|do not|don't|never)/iu.test(value)
-      ? value.split(/(?:并|然后|接着|[:：])(?=\s*(?:(?:请|继续|直接)\s*)?(?:只(?:读|检查|查看|阅读|审查|分析)|仅(?:限)?(?:只读|查看|读取|检查|审查|阅读|分析)))|(?:并|同时)(?=\s*请\s*(?:(?:继续|直接|另外)\s*)?(?:编辑|修改|移除|去除|处理|生成|绘制|查询|查找|搜索|检索|联网|使用|调用))|\band\b(?=\s+(?:only|read.only)\s+(?:inspect|read|review|check|analy[sz]e)\b)/iu)
+      ? value.split(/(?:并|然后|接着|[:：])(?=\s*(?:(?:请|继续|直接)\s*)?(?:只(?:读|检查|查看|阅读|审查|分析)|仅(?:限)?(?:只读|查看|读取|检查|审查|阅读|分析)))|(?:并|同时)(?=\s*请\s*(?:(?:继续|直接|另外)\s*)?(?:编辑|修改|移除|去除|处理|生成|绘制|查询|查找|搜索|检索|联网|使用|调用|创建|新建|添加|编写|撰写|制作|输出|保存|导出))|\band\b(?=\s+(?:only|read.only)\s+(?:inspect|read|review|check|analy[sz]e)\b)|\b(?:and|then)\b(?=\s+please\s+(?:create|add|write|make|produce|export|save)\b)/iu)
       : [value])
     .map(value => value.trim()).filter(Boolean);
   const controlText = maskUrlText;
@@ -601,7 +628,7 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
   // a concrete object. Keep exact names, specific triggers and independently
   // supported action/object pairs, including short requests.
   const concrete=concreteTaskSupport(skill,capability,assessment);
-  const concretePair=concrete.skill||concrete.codeTest||concrete.docx||concrete.data||concrete.research;
+  const concretePair=concrete.skill||concrete.codeTest||concrete.docx||concrete.data||concrete.research||concrete.stock||concrete.finance;
   const substantiveHit=scoreableHits.some(hit=>!weakEvidence(hit.term)
     && (!/^[\p{Script=Han}]+$/u.test(hit.term)||retrieval.queryWords!==null));
   const specificTrigger=triggerHits.some(term=>!weakEvidence(term)
@@ -611,6 +638,7 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
       &&!specificDomain&&!specificTrigger&&!substantiveHit&&!concretePair)score=0;
   if(!explicit&&concretePair&&taskObjectCompatible&&score<20)score=20;
   if(!explicit&&(concrete.testLanguageMismatch||concrete.testFrameworkMismatch))score=0;
+  if(!explicit&&financeSpecialistWithoutObject(skill,active))score=0;
   if(!explicit&&restrictedGitDelivery(skill)&&!gitDeliveryIntent(active))score=0;
   if (score > 0) score += calibration?.adjustment || 0;
   const availability = skillAvailability(skill, host, runtimeCapabilities);

@@ -1,6 +1,45 @@
-import {inferUserConstraints} from './request-evidence.mjs';
+import {inferUserConstraints,instructionText,instructionClauses} from './request-evidence.mjs';
 const list=x=>Array.isArray(x)?x:[];
 const modes=new Set(['plan','read','execute']);
+
+// A user may prohibit a particular action on an external object while still
+// authorizing a local deliverable. Apply this only to dedicated calendar
+// event tools; mixed-purpose tools still require their normal scope checks.
+export function prohibitedObjectOperation(query='',tool={}) {
+  const name=String(tool.name||'');
+  if(!/calendar|日历/i.test([name,tool.plugin,tool.server].join(' ')))return false;
+  const leaf=name.split('__').at(-1).replace(/[_-]+/g,' ');
+  if(!/\b(?:events?|appointments?)\b/i.test(leaf))return false;
+  const actions=[
+    [/\b(?:create|add|insert|schedule)\b/i,/(?:创建|新建|新增|添加|安排|生成)|\b(?:create|add|insert|schedule)\b/i],
+    [/\b(?:delete|remove|cancel)\b/i,/(?:删除|移除|取消)|\b(?:delete|remove|cancel)\b/i],
+    [/\b(?:update|edit|modify|change)\b/i,/(?:修改|更改|编辑|更新|改动)|\b(?:update|edit|modify|change)\b/i],
+  ];
+  const wanted=actions.filter(([toolAction])=>toolAction.test(leaf));
+  if(!wanted.length)return false;
+  const text=instructionText(query,{preserveNames:false}).replace(/https?:\/\/[^\s<>"“”。，！？；]+/giu,' ');
+  return instructionClauses(text).some(clause=>{
+    if(/^(?:以后|将来|未来|下次|日后|eventually\b|later\b|in future\b)/i.test(clause))return false;
+    const direct=clause.replace(/(?:不要|别|请勿)\s*(?:忘(?:记)?|漏掉|遗漏)(?:了|要)?/g,'')
+      .replace(/(?:不是|并非|不要|无需|不必|不需要|不)\s*(?:禁止|限制|阻止)/g,'')
+      .replace(/\b(?:do not|don't|never)\s+(?:prohibit|forbid|restrict)\b/gi,'');
+    const match=/(?<!不)(?<!不要)(?<!无需)(?<!不必)(?:不要|不得|禁止|不能|请勿|不准|严禁|无需|无须|不必|不需要|(?<![分识辨区判鉴])别|\b(?:do not|don't|never|without)\b)\s*([^。；;!?！？]{0,100})/iu.exec(direct);
+    if(!match)return false;
+    if(/(?:以后|将来|未来|后续|下一步|届时|下次|日后)\s*(?:再|才|就|将|会|请)?\s*$/u.test(direct.slice(0,match.index)))return false;
+    const body=match[1];
+    // A restriction on somebody else's calendar is not a ban on a dedicated
+    // event tool for the user's own calendar; the host must check the target.
+    if(/(?:其他人|他人|别人|其他用户|他人的|别人的).{0,8}(?:日历|日程|事件|活动)|\b(?:other|another) (?:people'?s|users?'?|persons?'?)\b.{0,12}\b(?:calendar|events?)\b/i.test(body))return false;
+    const object=/(?:日历|日程|行程).{0,16}?(?:事件|活动|日程|会议|安排)|(?:事件|活动|会议).{0,12}?(?:日历|日程)|\b(?:calendar|calendars?)\b.{0,25}?\b(?:events?|appointments?|meetings?)\b|\b(?:events?|appointments?)\b.{0,25}?\bcalendar\b/iu.exec(body);
+    if(!object)return false;
+    // Stop at the first object, except for a directly attached post-object
+    // verb. A later independent "并请创建" is not part of "不要删除".
+    const end=object.index+object[0].length,after=body.slice(end);
+    const attached=/^\s*(?:的|进行|予以)?\s*(?:创建|新建|新增|添加|安排|生成|删除|移除|取消|修改|更改|编辑|更新|改动)/u.exec(after)?.[0]||'';
+    const scoped=body.slice(0,end)+attached;
+    return wanted.some(([,userAction])=>userAction.test(scoped));
+  });
+}
 export function invocationConstraints(assessment={},options={}) {
   const c=options.invocationContext??{};
   if(!c||typeof c!=='object'||Array.isArray(c))throw new TypeError('invocationContext must be an object');
