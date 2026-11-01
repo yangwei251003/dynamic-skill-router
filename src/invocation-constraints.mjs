@@ -123,17 +123,21 @@ export function constrainCapability(card,constraints,tool={}) {
   const action=card.phase==='validation'?'verify':effect==='read'?'read':effect==='high-impact'?'commit':effect==='external-write'?'communicate':effect==='write-or-unknown'?'change':'unknown';
   if(constraints.readOnly&&effect!=='read'){restrict(effect==='unknown'?'defer':'skip');gates.push(effect==='unknown'?'read-effects-unverified':'read-only-scope');}
   if(constraints.allowedActions&&!constraints.allowedActions.includes(action)){restrict(action==='unknown'?'defer':'skip');gates.push('action-not-allowed-by-host');}
-  if(constraints.networkForbidden&&tool.annotations?.openWorldHint!==false){restrict('defer');gates.push('network-forbidden-or-effects-unverified');}
+  // openWorldHint describes the breadth of external interaction, not whether
+  // the tool uses a network. A closed-world tool may call a fixed remote API.
+  // The current runtime contract carries no independently verified offline
+  // guarantee, so leave the decision to the host for every tool under a ban.
+  if(constraints.networkForbidden){restrict('defer');gates.push('network-forbidden-or-effects-unverified');}
   const scopes=new Set([...list(constraints.sourceScopes),constraints.sourceScope].filter(Boolean));
   if(scopes.has('provided-only')) {if(decision==='use-now')decision='check-scope';gates.push('use-only-user-provided-sources');}
   if(scopes.has('specified-site-only')) {if(decision==='use-now')decision='check-scope';gates.push('use-only-user-specified-site');}
   const intents=list(card.intentMatches),providedUrls=list(card.inputEvidence?.providedUrls);
   const providedOpenOnly=scopes.has('provided-only')&&intents.includes('web-open')&&!intents.includes('web-search');
-  if(providedOpenOnly&&tool.annotations?.openWorldHint!==false) {
+  if(providedOpenOnly) {
     if(providedUrls.length)gates.push('verify-open-url-is-user-provided-source');
     else {restrict('defer');gates.push('verify-required-user-provided-source-url');}
   }
-  if(scopes.size&&!providedOpenOnly&&tool.annotations?.openWorldHint!==false
+  if(scopes.size&&!providedOpenOnly
       &&(list(card.intentMatches).includes('web-search')||/\bsearch(?:_query)?\b|(?:^|_)search(?:_|$)/i.test(`${tool.name||card.name||''} ${tool.description||''}`))) {
     // A site-only search is actionable after the host bounds the query to the
     // verified site. A supplied-only restriction does not establish that any
@@ -142,7 +146,7 @@ export function constrainCapability(card,constraints,tool={}) {
     gates.push('verify-bounded-source-query-before-search');
   }
   if(scopes.has('provided-only')&&scopes.has('specified-site-only')) {
-    if(tool.annotations?.openWorldHint!==false)restrict('defer');
+    restrict('defer');
     gates.push('verify-provided-source-and-specified-site-intersection');
   }
   if(constraints.preserveInputs) {if(decision==='use-now')decision='check-scope';gates.push('preserve-input-files');}

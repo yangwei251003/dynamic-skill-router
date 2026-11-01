@@ -453,9 +453,13 @@ export function inferUserConstraints(query='',activeText='',activeClauses=[]) {
   });
   const networkForbidden=clauses.some(c=>{
     // Strip negated prohibitions first; "不禁止联网" does not forbid access.
-    let direct=c.replace(/(?:不要|不用|无需|无须|不必|不需要|不要求|不强制|并非|并不|不是|没有|未曾|未明确|未|不)\s*(?:完全)?\s*(?:禁止|禁用|限制|关闭|断开|停用)\s*(?:联网|连网|连互联网|上网|网络|互联网|外网|网络访问|访问网络|连接网络)/g,'')
+    let direct=c.replace(/(?:不要|不用|无需|无须|不必|不需要|不要求|不强制|并非|并不|不是|没有|未曾|未明确|未|不)\s*(?:完全)?\s*(?:禁止|禁用|限制|关闭|断开|停用|不许|不准|不可以|不能)\s*(?:联网|连网|连互联网|上网|网络|互联网|外网|网络访问|访问网络|连接网络)/g,'')
+      .replace(/(?:不要|不用|无需|无须|不必|不需要|不要求|不强制|并非|并不|不是|没有|未曾|未|不)\s*(?:完全)?\s*(?:禁止|禁用|限制|不许|不准|不可以|不能)\s*(?:(?:将|让)\s*)?(?:(?:电脑|计算机|设备|机器|系统)\s*)?(?:连接|接入|访问|使用|连)\s*(?:(?:到|任何|所有|全部|外部|的)\s*){0,4}(?:网络|互联网|外网)/gu,'')
       .replace(/(?:不要|不用|无需|无须|不必|不需要|不要求|不强制|并非|不是)\s*(?:只|仅|完全)?\s*离线(?:模式|操作|完成|使用)?/g,'')
+      .replace(/(?:不要|不得|不准|不许|不可以|请勿|不用|无需|无须|不必|不需要|不要求|不强制|不允许|不能|没有(?:要求|说)?|没说|并非|并不|不是|未曾|未|不)\s*(?:(?:将|让)?(?:电脑|计算机|设备|机器|系统)\s*)?(?:(?:全程|全过程|始终|一直|保持|维持|处于|处在|进入|要求)\s*){0,4}(?:断网|离线)(?:状态|模式|环境)?/gu,'')
       .replace(/(?:说明|解释|介绍|讨论|描述|讲解|研究|分析|比较|探索|科普|理解|什么是|何为)\s*(?:一下)?\s*离线\s*(?:汇总|统计|归纳|整理|分析|处理|计算|工作|模式)?[^，。；]{0,14}?(?:概念|含义|原理|机制|定义|意义|区别)/gu,'')
+      .replace(/(?:说明|解释|介绍|讨论|描述|讲解|研究|分析|比较|探索|科普|理解|什么是|何为)\s*(?:一下)?\s*(?:(?:全程|保持|始终|一直|维持)\s*)?(?:断网|离线)(?:状态|模式|环境)?(?:的)?(?:概念|含义|原理|机制|定义|意义|区别|原因|必要性)/gu,'')
+      .replace(/(?:说明|解释|介绍|讨论|描述|讲解|研究|分析|比较|探索)\s*(?:一下)?\s*(?:如何|怎样|怎么|为何|为什么)\s*(?:(?:全程|保持|始终|一直|维持)\s*)?(?:断网|离线)(?:状态|模式|环境)?/gu,'')
       .replace(/\b(?:do not|don't|never|not)\s+(?:ban|prohibit|forbid|restrict|disable)\s+(?:the\s+)?(?:internet|network|web|online access)\b/gi,'');
     // Remove only the named tool-class noun before looking for a global ban;
     // an independent or coordinated "禁止联网" in the same clause remains.
@@ -467,10 +471,15 @@ export function inferUserConstraints(query='',activeText='',activeClauses=[]) {
     if(allowsProvidedNetworkUse)direct=direct
       .replace(/(?:不要|不得|禁止|不能|请勿|不必|无需|无须|别|不)\s*(?:再|主动|自行|擅自|去)?\s*(?:联网|连网|连互联网|上网|网上|在线)(?:去|进行)?(?:搜索|检索|查找|查询|查阅|浏览)/g,'')
       .replace(/\b(?:do not|don't|never)\s+(?:search|query|research)\s+(?:the\s+)?(?:internet|web|network|online)\b/gi,'');
-    const forbidden=/(?:不要|不得|禁止|不允许|不准|不能|请勿|严禁|(?<![分识辨区判鉴])别|不|避免|无需|不必)(?:(?:主动|自行|擅自|直接|尝试|再|实际|进行|执行|任何|通过|借助|使用|访问|连接|接入|向外|远程|网上|在线|外部|外网|网络|互联网|发起|发送|对外|第三方|的|\s)){0,12}(?:联网|连网|连互联网|上网|(?:网上|在线)(?:搜索|查找|浏览|检索|查询|访问|请求)|(?:使用|用|连接|接入|访问)(?:到|任何|外部)?(?:网络|互联网|外网)|网络(?:请求|访问|连接|通信|调用)|互联网(?:请求|访问|连接)|(?:搜索|查询|检索|浏览|查阅|访问)(?:互联网|网络|外网|网页|网站))/i;
+    const forbidden=/(?:不要|不得|禁止|不允许|不准|不许|不可以|不能|请勿|严禁|(?<![分识辨区判鉴])别|不|避免|无需|不必)(?:(?:主动|自行|擅自|直接|尝试|再|实际|进行|执行|任何|通过|借助|使用|访问|连接|接入|向外|远程|网上|在线|外部|外网|网络|互联网|发起|发送|对外|第三方|的|\s)){0,12}(?:联网|连网|连互联网|上网|(?:网上|在线)(?:搜索|查找|浏览|检索|查询|访问|请求)|(?:使用|用|连|连接|接入|访问)(?:到|任何|外部)?(?:网络|互联网|外网)|网络(?:请求|访问|连接|通信|调用)|互联网(?:请求|访问|连接)|(?:搜索|查询|检索|浏览|查阅|访问)(?:互联网|网络|外网|网页|网站))/i;
     const noRemoteAcquisition=/(?:不要|不得|禁止|不能|不准|请勿|严禁|(?<![分识辨区判鉴])别)\s*(?:再|主动|自行|直接)?\s*(?:通过|从|使用|利用)\s*(?:互联网|网络|外网|网上)\s*(?:获取|下载|访问|连接)/i;
+    const noNetworkConnection=/(?:不要|不得|禁止|不允许|不准|不许|不可以|不能|请勿|严禁)\s*(?:(?:再|主动|自行|直接|擅自)\s*){0,3}(?:(?:将|让)\s*)?(?:(?:电脑|计算机|设备|机器|系统)\s*)?(?:连接|接入|访问|使用|连)\s*(?:(?:到|任何|所有|全部|外部|的)\s*){0,4}(?:网络|互联网|外网)/u;
     const offline=/离线\s*(?:完成|处理|运行|使用|总结|汇总|统计|归纳|整理|提取|转换|分析|阅读|审查|检查|工作|执行|计算|编辑|生成|制作|查找|检索|搜索|安装|验证|调查|设计|解答|研究|模式|环境|状态|条件|方式|解释|介绍|讲解)/i;
-    return forbidden.test(direct)||noRemoteAcquisition.test(direct)||offline.test(direct)||/\b(?:no (?:internet|network)|offline only|work offline)\b|\b(?:do not|don't|never)\b.{0,28}\b(?:use|access|connect|browse|search|go online)\b.{0,25}\b(?:internet|web|network|online)\b/i.test(direct);
+    // State and continuity phrases are current restrictions, not commands to
+    // alter the machine's connection. Bare mentions such as "断网原因" are not.
+    const offlineState=/(?:全程|全过程|整个(?:任务|过程)|本(?:次)?任务|此次任务|始终|一直|必须|务必|需要|请|保持|维持|处于|处在|进入)\s*(?:(?:全程|全过程|始终|一直|必须|务必|保持|维持|处于|处在)\s*){0,4}(?:断网|离线(?:状态|模式|环境)?|断开(?:与|到)?(?:任何|所有|全部|外部)?(?:网络|互联网|外网)(?:连接)?)/u;
+    const setOfflineState=/(?:请|务必|必须|需要|要求)\s*(?:(?:将|让)\s*)?(?:电脑|计算机|设备|机器|系统)\s*(?:设置|设定|切换|设成|调整|置|调)(?:为|至|到)?\s*(?:断网|离线)(?:状态|模式|环境)?/u;
+    return forbidden.test(direct)||noRemoteAcquisition.test(direct)||noNetworkConnection.test(direct)||offline.test(direct)||offlineState.test(direct)||setOfflineState.test(direct)||/\b(?:no (?:internet|network)|offline only|work offline)\b|\b(?:do not|don't|never)\b.{0,28}\b(?:use|access|connect|browse|search|go online)\b.{0,25}\b(?:internet|web|network|online)\b/i.test(direct);
   });
   const sourcePattern=/(?:只|仅|只能|仅能).{0,7}(?:使用|(?<!引)用|阅读|读取|查看|浏览|研读|分析|读|根据|依据|参考|基于|利用|依托).{0,18}(?:(?:提供|给定|所给|已有|给的|给你(?:的)?|发给你(?:的)?|附上|附带|上传(?:的)?).{0,10}(?:资料|来源|内容|文件|数据|文档|笔记|图片|视频|素材|文本|链接|附件)|附件|正文|原文|材料|文本|链接)|(?:不要|不得|禁止|不能|请勿|不允许).{0,8}(?:检索|搜索|查找|查阅|获取|使用|采用|读取|参考|利用|浏览).{0,10}(?:其他|其它|额外|外部|更多|第三方).{0,8}(?:资料|来源|文献|信息|网页|网站|材料|内容|文档|数据)|\b(?:(?:only|solely)\s+(?:use|read|consult|rely on|based on)|(?:use|read|consult|rely on)\s+(?:only|solely))\b.{0,35}\b(?:(?:provided|supplied|given|attached)\s+(?:sources?|text|documents?|links?|notes|materials?|files?|data)|sources?|text|notes)\b|\b(?:do not|don't|never)\s+(?:search|consult|use)\b.{0,25}\b(?:other|additional|external)\s+(?:sources|materials|references)\b/i;
   const sourceNegated=c=>/(?:不必|无需|无须|不用|不需要|不要|(?<![分识辨区判鉴])别|不要求|没有要求|不限制|不局限|不限定).{0,12}(?:限制|(?:只|仅)(?:能)?(?:以|使用|用|阅读|读取|查看|浏览|研读|分析|读|引用|参考|根据|依据))|(?:不只|不仅|不止|不单|不光|并非只|并非仅|不是只|不是仅)(?:仅|是|单)?(?:以|使用|用|阅读|读取|查看|浏览|研读|分析|读|引用|参考|根据|依据)|\b(?:do not|don't|never)\s+(?:restrict|limit|require|insist|force)\b.{0,60}\b(?:only|solely)\b|\b(?:do not|don't|never)\s+(?:(?:use|read|consult|analy[sz]e)\s+(?:only|solely)|(?:only|solely)\s+(?:use|read|consult|analy[sz]e))\b/i.test(c);
