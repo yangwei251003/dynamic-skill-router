@@ -30,6 +30,37 @@ const words = (value) => {
   })].map(token).filter((item) => item.length >= 2 && !STOP.has(item));
 };
 
+// Character n-grams are useful for recall but can cross Chinese word
+// boundaries. Only use independent, word-aligned signals as standalone
+// support for an unrequested skill. No new score boost is introduced.
+const genericHan = new Set('开始 结束 使用 制作 创建 生成 编辑 修改 执行 运行 处理 查询 查看 检查 审查 核对 研究 进行 支持 需要 可以 完成 用户 当前 之后 之前 期间 提供 展示 输出 输入 结果 内容 资料 信息 文件 任务 工作 要求 不是 这个 目录 一个 一页 页面 离线 在线 不用 方案 方式 方法'.split(' '));
+const genericLatin = new Set('input output index file files page pages content task user local online offline create edit modify start stop run use used using show support result results format simple small one two'.split(' '));
+const segmenter = typeof Intl.Segmenter === 'function'
+  ? new Intl.Segmenter('zh-CN', {granularity: 'word'}) : null;
+function queryWordSet(text) {
+  if (!segmenter || !/\p{Script=Han}/u.test(text)) return null;
+  return new Set([...segmenter.segment(norm(text))]
+    .filter(x => x.isWordLike && /^[\p{Script=Han}]{2,}$/u.test(x.segment))
+    .map(x => x.segment));
+}
+function positiveSkillText(value) {
+  return String(value || '')
+    .replace(/(?:不要在以下场景触发|不适用(?:于)?|不用于|不要用于|避免用于|禁止用于|不建议用于)\s*[:：]?[^\n。！？!?；;]*/giu, ' ')
+    .replace(/\b(?:do not use for|don't use for|not intended for|not suitable for|avoid using for|not for)\b[^\n.!?;]*/giu, ' ');
+}
+function independentDescriptionHits(hits, retrieval, document) {
+  // When segmentation is unavailable, preserve prior routing behavior rather
+  // than asserting a word boundary or suppressing a potentially useful skill.
+  if (retrieval.queryWords === null) return null;
+  return hits.filter(hit => {
+    const term = hit.term;
+    if (/^[\p{Script=Han}]+$/u.test(term))
+      return retrieval.queryWords.has(term) && !genericHan.has(term)
+        && document.positiveText.includes(term);
+    return !genericLatin.has(term) && term.length >= 3;
+  });
+}
+
 function retrievalTerms(text, experimental = false) {
   const terms = new Set(words(text));
   const bridges = [
@@ -55,14 +86,16 @@ function retrievalTerms(text, experimental = false) {
 
 function retrievalIndex(skills, activeText, experimental = false) {
   const {terms, inferred} = retrievalTerms(activeText, experimental);
+  const queryWords = queryWordSet(activeText);
   const documents = skills.map((skill) => {
     const identity = [skill.id, skill.nameZh, skill.name, ...list(skill.aliases)].join(' ');
     const description = [skill.summaryZh, skill.description, ...list(skill.triggers)].join(' ');
-    return {identity: new Set(words(identity)), description: new Set(words(description))};
+    return {identity: new Set(words(identity)), description: new Set(words(description)),
+      positiveText: norm(identity + ' ' + positiveSkillText(description))};
   });
   const df = new Map();
   for (const doc of documents) for (const term of new Set([...doc.identity, ...doc.description])) df.set(term, (df.get(term) || 0) + 1);
-  return {terms, inferred, documents, df, corpusSize: skills.length, experimental};
+  return {terms, inferred, documents, df, corpusSize: skills.length, experimental, queryWords};
 }
 const explicitName = (skill) => [skill.id, skill.nameZh, skill.name, ...list(skill.aliases)].filter(Boolean);
 
@@ -216,6 +249,7 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
     .filter((hit) => hit.weight >= 1.4)
     .sort((a, b) => b.weight - a.weight);
   const lexicalHits = retrieval.experimental ? independentHits(rawLexicalHits, active) : rawLexicalHits;
+  const supportedHits = independentDescriptionHits(lexicalHits, retrieval, document);
   const descriptionScore = lexicalHits.slice(0, 5).reduce((sum, hit) => sum + hit.weight, 0);
   const domain = assessment.domain;
   const domainMatch = domain && lexicalScore([description, ...list(skill.domains)].join(' '), domain);
@@ -234,16 +268,22 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
   const strongDescription = lexicalHits.length >= 2 && descriptionScore >= 7;
   if (!explicit && !triggerHits.length && !strongDescription && !domainMatch && !diagnosticNameMatch) score = 0;
   if (!explicit && !triggerHits.length && !domainMatch && score < 8) score = 0;
+  if (!explicit && !triggerHits.length && !domainMatch && !diagnosticNameMatch && supportedHits !== null) {
+    const distinct = new Set(supportedHits.map(hit => hit.term));
+    const identityAnchor = supportedHits.some(hit => document.identity.has(hit.term));
+    if (distinct.size < 2 && !identityAnchor) score = 0;
+  }
   if (score > 0) score += calibration?.adjustment || 0;
   const availability = skillAvailability(skill, host, runtimeCapabilities);
   if (!availability.discovered || !availability.readable || !availability.enabled || !availability.compatible) score = -100;
   const reasons = [];
   if (explicit) reasons.push('explicitly requested in active task');
   if (triggerHits.length) reasons.push(`matched task signal: ${triggerHits[0]}`);
-  if (lexicalHits.length) reasons.push(`distinctive manual terms: ${lexicalHits.slice(0, 3).map((hit) => `${hit.term}${hit.inferred ? ' (inferred)' : ''}`).join(', ')}`);
+  const explainedHits = supportedHits?.length ? supportedHits : lexicalHits;
+  if (explainedHits.length) reasons.push(`distinctive manual terms: ${explainedHits.slice(0, 3).map((hit) => `${hit.term}${hit.inferred ? ' (inferred)' : ''}`).join(', ')}`);
   if (diagnosticNameMatch) reasons.push('diagnostic request plus mitigation/check requirement matches a general debugging manual');
   if (calibration?.adjustment) reasons.push(`verified feedback: ${calibration.adjustment > 0 ? '+' : ''}${calibration.adjustment}`);
-  const matchedPhrase = triggerHits[0] || (explicit ? names.find((name) => lexicalScore(active, name)) : lexicalHits[0]?.term);
+  const matchedPhrase = triggerHits[0] || (explicit ? names.find((name) => lexicalScore(active, name)) : explainedHits[0]?.term);
   const clauseIndex = assessment.activeClauses?.findIndex((clause) => matchedPhrase && lexicalScore(clause, matchedPhrase)) ?? -1;
   const inference = retrieval.inferred.find((item) => item.term === matchedPhrase);
   const evidence = matchedPhrase ? [{kind: triggerHits.length ? 'trigger' : explicit ? 'explicit' : inference ? 'inferred-description' : 'description', phrase: matchedPhrase,

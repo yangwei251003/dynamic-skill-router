@@ -97,10 +97,17 @@ export function inferUserConstraints(query='',activeText='',activeClauses=[]) {
   // Evaluate each directive independently: a negation in one sentence must
   // never bind a network or source phrase in the next sentence.
   const active=Array.isArray(activeClauses)&&activeClauses.length?activeClauses:instructionClauses(activeText);
-  const actionable=active.map(c=>c.replace(/(?:说明|解释|介绍|描述|讲解|讨论)(?:一下)?(?:如何|怎样|怎么)(?:去|来)?(?:修改|更改|修复|编辑|删除|创建|写入|导出|编译|部署|更新)(?:配置|文件|项目|代码|数据库|工程|内容){0,3}/g,'')
+  const actionable=active.map(c=>c.replace(/(?<!不能)(?<!不可能)(?<!不可以)(?<!不得)(?<!不要)(?<!不会)(?<!无法)(?:不要|不得|禁止|不能|请勿|不必|无需|不需要|不|避免)\s*(?:实际|直接|擅自|自行|再|去|执行|进行){0,3}\s*(?:修改|改动|更改|改写|重构|修复|编辑|删除|创建|新建|部署|上传|发送|写入|保存|替换|更新|导出|编译|另存)/g,'')
+    .replace(/\b(?:do not|don't|never|without)\s+(?:actually\s+|directly\s+)?(?:edit|editing|modify|modifying|change|changing|fix|fixing|repair|delete|deleting|create|creating|write|writing|deploy|update|updating|save|saving)\b/gi,'')
+    .replace(/(?:说明|解释|介绍|描述|讲解|讨论)(?:一下)?(?:如何|怎样|怎么)(?:去|来)?(?:修改|更改|修复|编辑|删除|创建|写入|导出|编译|部署|更新)(?:配置|文件|项目|代码|数据库|工程|内容){0,3}/g,'')
     .replace(/\b(?:explain|describe|outline|show|tell)(?:\s+\w+){0,3}?\s+how\s+to\s+(?:edit|modify|change|fix|repair|delete|create|write|deploy|update)\b(?:\s+(?:the|a|an|configuration|config|files?|documents?|project|code)){0,5}/gi,''));
   const outputPattern=/(?:另存|另行保存|保存(?:到|为)|写入|导出).{0,25}(?:文件|报告|文档|工程|代码|项目|\.\w{2,5}\b)|(?:输出|写出|记录|生成|制作|撰写).{0,25}(?:到|至|为|入|存为).{0,20}(?:文件|报告|文档|工程|代码|项目|\.\w{2,5}\b)|(?:新建|创建|生成|制作|修改|修复|重构|删除).{0,20}(?:文件|文档文件|工程|代码|项目|原文件|原文|\.\w{2,5}\b)|\b(?:save|write|create|edit|modify|update|export|delete)\b.{0,35}(?:\b(?:file|document file|project|code)\b|[a-z0-9_-]+\.(?:csv|json|md|txt|pdf|docx|xlsx|pptx|png|jpg|html|js|py)\b)/i;
-  const outputFile=actionable.some(c=>outputPattern.test(c));
+  // A no-change instruction may be followed in the same clause by a
+  // separately requested new output. The negative applies to the original,
+  // not to a new file named after "and/then".
+  const separateOutput=clauses.some(c=>/(?:不要|不得|禁止|请勿|不)\s*(?:修改|改动|更改|写入|覆盖)\s*(?:原(?:始)?(?:文件|文档|工程|项目|数据)|原件|输入(?:文件|数据))\s*(?:并|再|然后|同时|但)\s*(?:新建|创建|另存|生成|保存|写入).{0,30}(?:新文件|文件|报告|文档|副本|[a-z0-9_.-]+\.(?:csv|json|md|txt|pdf|docx|xlsx|pptx|html|js|py)\b)/i.test(c)
+    ||/\b(?:without|do not|don't|never)\s+(?:modifying|changing|editing|modify|change|edit|overwriting|overwrite)\b.{0,25}\b(?:original|input|source|existing)\b.{0,20}\b(?:and|then|but)\s+(?:create|write|save|generate)\b.{0,35}(?:\b(?:new file|report|copy)\b|[a-z0-9_.-]+\.(?:csv|json|md|txt|pdf|docx|xlsx|pptx|html|js|py)\b)/i.test(c));
+  const outputFile=actionable.some(c=>outputPattern.test(c))||separateOutput;
   const explicitGlobal=clauses.some(c=>/(?:全程|整个任务|所有操作|严格).{0,8}只读|(?:不要|不得|禁止|不能|严禁|请勿).{0,8}(?:修改|写入|更改|删除).{0,8}(?:任何|所有|一切).{0,8}(?:文件|内容|项目|数据)?|\b(?:no changes at all|do not modify any files|do not write any files)\b/i.test(c));
   const readOnlyLanguage=clauses.some(c=>/只读|只(?:查|看|读|审查|审阅|做.{0,5}分析)|仅(?:限)?(?:阅读|查看|检查|审查|审阅|分析)|\bread.only\b|\breview only\b/i.test(c.replace(/(?:不要|不必|无需|不需要|不要求|禁止)\s*(?:使用|采用|保持)?\s*只读(?:模式)?/g,'').replace(/\b(?:not|no longer)\s+read.only\b/gi,'')));
   const preserveInput=clauses.some(c=>/(?:保持|保留).{0,12}(?:文件|原文|文档|数据|工程).{0,8}(?:原样|不变|不动)|(?:原|原始|输入|已有|现有|提供的)(?:文件|文档|数据|工程|项目|内容|资料)(?:保持)?(?:原样|不变|不动|不被修改)|(?:不要|不得|禁止|请勿|不).{0,5}(?:修改|改动|更改|写入)(?:.{0,10}(?:文件|文档|数据|工程|内容))?|\b(?:do not|don't|never|without)\s+(?:modify|edit|overwrite|change|changing|alter)\b.{0,35}\b(?:input|original|source|existing|repository|repo|website|page|document|file|image|project|part)\b/i.test(c));

@@ -186,7 +186,7 @@ function requestedDelivery(assessment, entry) {
 // supply reasons to inspect a currently registered tool; they never execute it
 // or infer permissions from a description. Evaluate independent clauses so that
 // "make slides and search for pictures" is not image-generation intent.
-const PICTURE=/(?:图片|图像|照片|插画|插图|海报|画像|漫画|图画|截图|(?:这|那)(?:张|幅)图|\b(?:images?|screenshots?|photos?|photographs?|pictures?|illustrations?|posters?|portraits?|comics?)\b|\b[\w.-]+\.(?:png|jpe?g|webp|gif|bmp)\b)/i;
+const PICTURE=/(?:图片|图像|照片|插画|插图|海报|画像|漫画|图画|截图|图标|(?:这|那)(?:张|幅)图|\b(?:images?|screenshots?|photos?|photographs?|pictures?|illustrations?|posters?|portraits?|comics?|icons?)\b|\b[\w.-]+\.(?:png|jpe?g|webp|gif|bmp)\b)/i;
 const splitIntentClauses=assessment=>list(assessment.activeClauses).flatMap(c=>c.split(/(?:并且|然后|同时|以及|并|\band then\b|\band\b)/i)).map(x=>x.trim()).filter(Boolean);
 const ARTIFACT_ACTION=/(?:修改|编辑|修复|添加|插入|更新|开发|搭建|实现|优化|维护|排版|\b(?:update|edit|fix|repair|modify|add|insert|build|develop)\b)/i;
 const ARTIFACT_TYPES=[
@@ -202,20 +202,30 @@ function semanticNeeds(assessment) {
   const needs=[];
   for(const clause of clauses) {
     const info=/^(?:(?:请|帮我|请你|麻烦|please)\s*)*(?:解释|介绍|讲解|说明|比较|举例|(?:给(?:我|出)?|提供|列举).{0,20}(?:例子|示例|实例|样例)|什么是|如何|怎么|explain\b|describe\b|(?:give|show)\b.{0,25}\bexamples?\b|what is\b|how (?:to|does|do)\b)/i.test(clause);
-    const picture=PICTURE.test(clause);
+    const imageClause=clause.replace(/(?:不要|不得|禁止|不能|请勿|不必|无需|无须|不需要|别|不)\s*(?:实际|直接|主动|自行|擅自|再|去)?\s*(?:生成|绘制|画出|制作|创作|编辑|修改|修复)/g,'')
+      .replace(/\b(?:do not|don't|never|without)\s+(?:actually\s+|directly\s+)?(?:generate|create|draw|make|render|edit|modify|retouch)\b/gi,'');
+    const picture=PICTURE.test(imageClause);
     if(picture) {
       const source=/(?:附件|附图|上传的|所附|\b(?:attached|attachment|uploaded)\b)/i.test(clause)?'attachment'
         :/(?:刚发|刚才发|刚刚发|刚发送|\bjust sent\b)/i.test(clause)?'conversation-image'
         :/(?:本地|文件|磁盘|\b(?:local|filesystem|file)\b|[a-z]:[\\/])/i.test(clause)?'local'
           :/https?:\/\//i.test(clause)?'url':'unspecified';
       const actualInput=source!=='unspecified'||/(?:这张|这幅|该图片|给定|提供的|\b(?:this|that|provided|supplied|existing)\b)/i.test(clause);
-      const create=/(?:生成|绘制|画出|画一|画个|制作|创作|设计(?!稿)|生成一|\b(?:generate|create|draw|make|render)\b).{0,28}(?:图片|图像|照片|插画|插图|海报|画像|漫画|图画|\b(?:image|photo|picture|illustration|poster|portrait|comic)\b)/i.test(clause);
-      const edit=/(?:修改|编辑|调整|替换|美化|抠图|去背景|更换|修复)(?:(?:一下|这张|这幅|那张|那幅|这些|该|现有的?|原有的?|已有的?|上传的|给定的|提供的|产品)){0,5}(?:图片|图像|照片|插画|插图|海报|截图|图)|(?:图片|图像|照片|插画|插图|海报|截图|(?:这|那)(?:张|幅)图)(?:(?:的(?:背景|颜色|内容|细节|风格|元素)?)|进行|做|整体)?(?:修改|编辑|调整|替换|美化|抠图|去背景|更换|修复|改成|改为|变成)/i.test(clause)
-        ||imageAction(clause,'(?:edit|modify|retouch|alter|change|replace)','(?:editing|modification|retouching)')
-        ||/(?:去除|去掉|移除|抠除|更换|删除|\b(?:remove|erase|replace)\b).{0,28}(?:背景|background).{0,35}(?:图片|图像|照片|\b(?:image|photo|photograph|picture)\b)|(?:图片|图像|照片|\b(?:image|photo|photograph|picture)\b).{0,28}(?:背景|background).{0,20}(?:去除|去掉|移除|抠除|更换|删除|\b(?:remove|erase|replace)\b)|(?:去除|去掉|移除|抠除|更换|删除|\b(?:remove|erase|replace)\b).{0,28}(?:图片|图像|照片|\b(?:image|photo|photograph|picture)\b).{0,16}(?:背景|background)/i.test(clause);
+      const createVerb='(?:生成|绘制|画出|画一|画个|制作|创作|设计(?!稿)|生成一|\\b(?:generate|create|draw|make|render)\\b)';
+      const nonIconCreate=new RegExp(createVerb+'.{0,28}(?:图片|图像|照片|插画|插图|海报|画像|漫画|图画|\\b(?:image|photo|picture|illustration|poster|portrait|comic)\\b)','i').test(imageClause);
+      const iconCreate=new RegExp(createVerb+'.{0,28}(?:图标|\\bicons?\\b)','i').test(imageClause);
+      const create=nonIconCreate||iconCreate;
+      const explicitIconAsset=/(?:png|jpe?g|webp|位图|图片|素材).{0,16}(?:图标|\bicons?\b)|(?:图标|\bicons?\b).{0,12}\.(?:png|jpe?g|webp)\b/i.test(imageClause);
+      const iconCodeOnly=!explicitIconAsset&&(/(?:图标|\bicons?\b).{0,24}(?:组件|代码|源码|纯\s*(?:css|svg)|\b(?:component|code|source)\b)|(?:图标组件|icon\s+component)/i.test(imageClause)
+        ||/(?:react|css|svg).{0,20}(?:代码|源码|组件|\b(?:code|component)\b).{0,24}(?:生成|绘制|画|制作|\b(?:generate|create|draw|render)\b).{0,24}(?:图标|\bicons?\b)/i.test(imageClause));
+      const visualCodeOnly=/(?:图片|图像|插画|插图)(?:的)?(?:组件|代码|源码)|\b(?:image|illustration|picture)\s+(?:component|code)\b|\b(?:image|illustration|picture)\s+as\s+(?:an?\s+)?(?:react\s+)?component\b/i.test(imageClause);
+      const edit=/(?:修改|编辑|调整|替换|美化|抠图|去背景|更换|修复)(?:(?:一下|这张|这幅|那张|那幅|这些|该|现有的?|原有的?|已有的?|我上传的|上传的|给定的|提供的|产品)){0,5}(?:图片|图像|照片|插画|插图|海报|截图|图标|图)|(?:图片|图像|照片|插画|插图|海报|截图|图标|(?:这|那)(?:张|幅)图)(?:(?:的(?:背景|颜色|内容|细节|风格|元素)?)|进行|做|整体)?(?:修改|编辑|调整|替换|美化|抠图|去背景|更换|修复|改成|改为|变成)/i.test(imageClause)
+        ||imageAction(imageClause,'(?:edit|modify|retouch|alter|change|replace)','(?:editing|modification|retouching)')
+        ||/\b(?:edit|modify|retouch|alter|change)\b.{0,28}\bicons?\b/i.test(imageClause)
+        ||/(?:去除|去掉|移除|抠除|更换|删除|\b(?:remove|erase|replace)\b).{0,28}(?:背景|background).{0,35}(?:图片|图像|照片|图标|\b(?:image|photo|photograph|picture|icon)\b)|(?:图片|图像|照片|图标|\b(?:image|photo|photograph|picture|icon)\b).{0,28}(?:背景|background).{0,20}(?:去除|去掉|移除|抠除|更换|删除|\b(?:remove|erase|replace)\b)|(?:去除|去掉|移除|抠除|更换|删除|\b(?:remove|erase|replace)\b).{0,28}(?:图片|图像|照片|图标|\b(?:image|photo|photograph|picture|icon)\b).{0,16}(?:背景|background)/i.test(imageClause);
       const read=/(?:查看|阅读|读取|观察|识别|看一下|解释|描述|分析|\b(?:view|read|inspect|examine|describe|analy[sz]e|interpret|look at)\b)/i.test(clause);
-      if(!info&&create)needs.push({kind:'image-create',clause,source});
-      if(!info&&edit)needs.push({kind:'image-edit',clause,source});
+      if(!info&&create&&((nonIconCreate&&!visualCodeOnly)||(iconCreate&&!iconCodeOnly)))needs.push({kind:'image-create',clause,source});
+      if(!info&&edit&&!iconCodeOnly)needs.push({kind:'image-edit',clause,source});
       if(read&&!create&&!edit&&(!info||actualInput))needs.push({kind:'image-read',clause,source});
       if(!info&&/(?:搜索|检索|查找|寻找|找|\b(?:search|find|look for)\b)/i.test(clause))needs.push({kind:'image-search',clause,source});
     }
