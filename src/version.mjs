@@ -1,2 +1,2 @@
-export const ROUTER_VERSION = '4.3.0-rc.25';
+export const ROUTER_VERSION = '4.3.0-rc.26';
 export const REGISTRY_SCHEMA_VERSION = 2;

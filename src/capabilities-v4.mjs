@@ -329,16 +329,20 @@ function restrictedSourceAt(work,index) {
 }
 function sourceAccessNeeds(assessment) {
   const work=accessWork(assessment);
-  return work.flatMap((clause,index)=>{
+  const bound=list(assessment.taskStructure?.inputEvidence?.sources)
+    .filter(source=>source.role==='required'&&source.access==='restricted')
+    .map(source=>source.evidence);
+  const legacy=work.flatMap((clause,index)=>{
     if(!remoteSource.test(clause)||!sourceRead.test(clause)||!restrictedSourceAt(work,index)
       || /本地(?:保存|副本|文件)|离线|\b(?:local\s+(?:copy|file)|offline)\b|(?:给定|已提供|粘贴).{0,15}(?:正文|内容|摘录)|\b(?:provided|supplied|pasted)\s+(?:text|content|excerpt)\b/i.test(clause)
       || /^\s*(?:(?:please|only|now)\s+|请|只|仅)*(?:explain|describe|how\b|解释|介绍|说明如何|如何)/i.test(clause))return [];
-    return [{accessClass:'authenticated-private',requirementSource:'user-request',evidence:clause,
+    return [clause];
+  });
+  return unique([...bound,...legacy]).map(clause=>({accessClass:'authenticated-private',requirementSource:'user-request',evidence:clause,
       authenticationStatus:'unknown',capabilityStatus:'unverified',
       gaps:['authenticated-source-capability-unverified','authentication-state-unverified'],
       authority:'advisory-only',
-      guidance:'该来源需要与目标资源匹配的受限内容读取能力及认证状态证据；当前元数据未证明可读取或已登录。沿用现有授权，核实可用连接器/浏览器会话与目标访问条件；公开搜索不能证明读到了受限内容，保留用户对搜索与上传的限制。'}];
-  });
+      guidance:'该来源需要与目标资源匹配的受限内容读取能力及认证状态证据；当前元数据未证明可读取或已登录。沿用现有授权，核实可用连接器/浏览器会话与目标访问条件；公开搜索不能证明读到了受限内容，保留用户对搜索与上传的限制。'}));
 }
 
 function publicWebNeed(assessment, includeHostNeeds = true) {
@@ -360,6 +364,12 @@ function publicWebNeed(assessment, includeHostNeeds = true) {
     if (/(?:给定|已提供|附上|粘贴).{0,15}(?:正文|内容|摘录|资料|材料|文本)|\b(?:provided|supplied|pasted|attached)\s+(?:text|content|excerpt|documents?)\b/i.test(clause)) return false;
     return clause;
   });
+  // Shared positive evidence cannot precede or override the existing exclusions.
+  // Rebind its clause through the same projection before accepting an input need;
+  // stale evidence is not authority to revive supplied/local/private/explanatory work.
+  if(list(assessment.taskStructure?.inputEvidence?.sources).some(input=>input.role==='required'
+    &&input.location==='public-network'&&input.access!=='restricted'
+    &&accessWork({activeClauses:[input.evidence]}).some(clause=>eligible.includes(clause))))return true;
   // A neighboring explicit source instruction can qualify the lookup clause;
   // unrelated mentions or an excluded local/private clause cannot supply it.
   const sourceInstruction=clause=>clause&&source.test(clause)

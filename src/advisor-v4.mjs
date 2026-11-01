@@ -10,7 +10,8 @@ import {taskText} from './task-input.mjs';
 import {adviseTaskMethods,methodDirectives} from './task-methods-v4.mjs';
 import {assessRestrictions,negativeRequestPattern,positiveRequestPrefix,sharedEnglishNegation} from './task-restrictions.mjs';
 import {closedSuppliedProse} from './supplied-prose.mjs';
-import {closedSuppliedPresentation,closedSuppliedFormatting} from './native-closure.mjs';
+import {closedSuppliedPresentation,closedSuppliedFormatting,closedSuppliedTransformation} from './native-closure.mjs';
+import {inputEvidence} from './input-evidence.mjs';
 import {requestedName,unquoteRequestedNames} from './request-entities.mjs';
 import {webImplementation,evidenceResearch,cadArtifact,latexArtifact,mcpImplementation,imageArtifact,structuredDataOperation,accessibilityNeed,manualNeedKeys,backendImplementation,designToCode,wordDocumentArtifact,desktopObservation,skillAuthoring,publicInformationSearch,businessAnalysis,experimentWork,experimentDesign,electricalDesign,databaseMigration,electricalInspection,wordDocumentInspection,numericalComputation,optionComparison,gameImplementation,sourceCodeReview,latexSourceRepair} from './task-intents.mjs';
 
@@ -250,6 +251,9 @@ export function taskAssessment(query, taskContext = {}, invocationContext = {}) 
   const clauses = suppliedOperation ? {...parsedClauses,active:[suppliedOperation.instructionText],methodClauses:[suppliedOperation.instructionText]} : parsedClauses;
   const activeText = clauses.active.join('\n');
   const structure = taskStructure(activeText);
+  // Preserve input obligations independently of lexical retrieval projection.
+  // Both discovery and fast closure consume this same source-bound evidence.
+  structure.inputEvidence=inputEvidence(parsedClauses.active,closedSuppliedTransformation(query));
   const strings = values => unique(list(values).filter(value => typeof value === 'string' && value.trim()).map(value => value.trim()));
   const statedActions = strings(taskContext.actions);
   const statedDeliverables = strings(taskContext.deliverables);
