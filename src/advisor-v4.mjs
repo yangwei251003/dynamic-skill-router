@@ -68,6 +68,10 @@ const words = (value) => {
 // support for an unrequested skill. No new score boost is introduced.
 const genericHan = new Set('开始 结束 使用 制作 创建 生成 编辑 修改 执行 运行 处理 查询 搜索 查看 检查 审查 核对 研究 进行 支持 需要 可以 完成 用户 当前 之后 之前 期间 提供 展示 输出 输入 结果 内容 正文 资料 信息 数据 文件 任务 工作 交付 要求 不是 这个 目录 一个 一页 页面 离线 在线 不用 方案 方式 方法 设计 实现 出现 日志 复现'.split(' '));
 const genericLatin = new Set('input output index file files page pages content task user local online offline create edit modify start stop run use used using show support result results format simple small one two'.split(' '));
+// Common actions, quantity words and output labels are useful for recall,
+// but a coincidence of several of them is not an independent task object.
+const weakEvidenceHan = new Set('改进 测试 更新 最新 清楚 提出 一份 客户 开发 本地 系统 完整 报告 统计 区间 比较 包含 记录 数量 顺序 说明 情况 主要 相关 分析 安装 优先 时间 原始 其他'.split(' '));
+const weakEvidenceLatin = new Set('category share count percent total latest update test testing report local system customer develop complete describe compare summary analysis statistics'.split(' '));
 // Generic product suffixes do not identify a provider when qualified by a
 // distinct proper name (for example, "Example Drive"). The prefix remains
 // available as direct evidence for that provider's own skill.
@@ -176,6 +180,63 @@ function independentDescriptionHits(hits, retrieval, document) {
   });
 }
 
+function weakEvidence(value) {
+  const term=norm(value).trim();
+  if(!term || genericHan.has(term) || genericLatin.has(term) || weakEvidenceHan.has(term) || weakEvidenceLatin.has(term))return true;
+  if(segmenter && /^[\p{Script=Han}]+$/u.test(term)) {
+    const pieces=[...segmenter.segment(term)].filter(part=>part.isWordLike).map(part=>part.segment);
+    if(pieces.length>1&&pieces.every(part=>genericHan.has(part)||weakEvidenceHan.has(part)))return true;
+  }
+  return false;
+}
+
+function testingLanguages(value) {
+  const text=String(value||''), found=new Set();
+  if(/\b(?:python|pytest|unittest)\b|\.py\b/i.test(text))found.add('python');
+  if(/\b(?:javascript|typescript|node(?:\.js)?|jest|vitest|mocha)\b|\.(?:js|jsx|ts|tsx)\b/i.test(text))found.add('javascript');
+  if(/\b(?:java|junit)\b/i.test(text))found.add('java');
+  if(/\b(?:rust|cargo\s+test)\b|\.rs\b/i.test(text))found.add('rust');
+  if(/\bgolang\b|\.go\b|(?:^|[^a-z])go[-_](?:test|testing)/i.test(text))found.add('go');
+  if(/\bcsharp\b|(?:^|[^a-z])c#(?![a-z0-9])|\.cs\b/i.test(text))found.add('csharp');
+  if(/\bfsharp\b|(?:^|[^a-z])f#(?![a-z0-9])|\.fs\b/i.test(text))found.add('fsharp');
+  return found;
+}
+
+function concreteTaskSupport(skill,capability,assessment) {
+  const active=assessment.activeText||'';
+  const identity=[skill.id,skill.nameZh,skill.name,skill.category,skill.sourceId,...list(skill.aliases)].filter(Boolean).join(' ');
+  const purpose=positiveSkillText([skill.summaryZh,skill.description].filter(Boolean).join(' ')).slice(0,700);
+  const skillTask=/(?:技能|\bskills?\b).{0,25}(?:创建|安装|更新|测试|管理|优化|审查|盘点|查找|搜索|\b(?:create|install|update|test|manage|audit|find)\b)|(?:创建|安装|更新|测试|管理|优化|审查|盘点|查找|搜索|\b(?:create|install|update|test|manage|audit|find)\b).{0,25}(?:技能|\bskills?\b)/i.test(active);
+  const skillManual=/(?:skill[-_](?:assistant|creator|installer|stocktake|vetter|conductor)|技能(?:管理|治理|创建|安装|盘点|审查))/i.test(identity);
+  const testTask=list(assessment.activeClauses).some(c=>/(?:测试|单测|回归|\btest(?:ing)?\b).{0,30}(?:代码|程序|函数|软件|接口|\b(?:code|function|software|api|python|javascript|typescript|rust|java)\b)|(?:代码|程序|函数|软件|接口|\b(?:code|function|software|api|python|javascript|typescript|rust|java)\b).{0,30}(?:测试|单测|回归|\btests?\b)/i.test(c));
+  const testManual=/(?:test[-_ ]runner|(?:python|javascript|typescript|rust|java|go|csharp|fsharp)[-_ ]test(?:ing)?|测试(?:运行|执行|框架)|\b(?:unit|integration) tests?\b|\b(?:pytest|unittest|xunit|nunit|junit)\b)/i.test(identity+' '+purpose.slice(0,250));
+  const requestedLanguages=testingLanguages(active),identityLanguages=testingLanguages(identity);
+  const manualLanguages=identityLanguages.size?identityLanguages:testingLanguages(purpose.slice(0,250));
+  const testLanguageMismatch=testTask&&testManual&&requestedLanguages.size>0&&manualLanguages.size>0
+    &&![...requestedLanguages].some(language=>manualLanguages.has(language));
+  // App-framework-specific manuals should not be promoted merely because
+  // they mention generic unit tests for the same programming language.
+  const appFrameworks=/\b(?:django|fastapi|flask|spring|react|vue|angular)\b/gi;
+  const manualFrameworks=[...identity.matchAll(appFrameworks)].map(m=>m[0].toLowerCase());
+  const requestedFrameworks=new Set([...active.matchAll(appFrameworks)].map(m=>m[0].toLowerCase()));
+  const testFrameworkMismatch=testTask&&testManual&&manualFrameworks.length>0
+    &&!manualFrameworks.some(name=>requestedFrameworks.has(name));
+  const docTask=list(assessment.activeClauses).some(c=>/(?:交付|生成|制作|创建|编辑|修改|读取|阅读|检查|导出|另存|\b(?:create|edit|read|open|produce|export)\b).{0,70}(?:\.docx\b|\bword\b|word文档)|(?:\.docx\b|\bword\b|word文档).{0,50}(?:交付|生成|制作|创建|编辑|修改|读取|阅读|检查|导出|\b(?:create|edit|read|open|produce|export)\b)/i.test(c));
+  const docManual=/(?:^|[^a-z])(?:docx|documents?|word)(?=$|[^a-z])|文档/i.test(identity)
+    && /(?:\.docx\b|\bword\b|word文档)/i.test(purpose)
+    && /(?:create|edit|read|manipulat|生成|创建|编辑|读取|处理)/i.test(purpose);
+  const dataTask=/(?:csv|xlsx?|电子表格|数据)/i.test(active)&&/(?:统计|汇总|分析|去重|筛选|\b(?:analy[sz]e|aggregate|summari[sz]e|filter)\b)/i.test(active);
+  // Promote general tabular analysis, not every geospatial, statistical or
+  // library-specific specialist merely because its description says "data".
+  const dataManual=capability==='data-analysis'&&/(?:^|[^a-z])(?:data[-_ ]analysis|exploratory[-_ ]data[-_ ]analysis|数据分析)(?=$|[^a-z])/i.test(identity)
+    &&/(?:csv|xlsx?|表格|\b(?:data|tabular)\b)/i.test(purpose);
+  const researchTask=/(?:横纵|纵横)(?:分析|研究|比较|对比)/i.test(active)
+    ||/(?:纵向|历时|历史|演进|演变|发展|生命周期)/i.test(active)&&/(?:横向|同类|竞品|比较|对比)/i.test(active)
+      &&/(?:分析|研究|调研|比较|对比)/i.test(active)&&/(?:产品|公司|技术|概念|人物|机构|行业|模式|平台|政策|服务|\b(?:product|company|technology|industry|policy|person)\b)/i.test(active);
+  const researchManual=/(?:hv[-_]analysis|横纵分析|纵横分析)/i.test(identity+' '+purpose.slice(0,250));
+  return {skill:skillTask&&skillManual,codeTest:testTask&&testManual&&!testLanguageMismatch&&!testFrameworkMismatch,docx:docTask&&docManual,data:dataTask&&dataManual,research:researchTask&&researchManual,testLanguageMismatch,testFrameworkMismatch};
+}
+
 function retrievalTerms(text, experimental = false) {
   const terms = new Set(words(text));
   const bridges = [
@@ -225,6 +286,14 @@ function retrievalIndex(skills, activeText, experimental = false, negativeSkillC
 }
 const explicitName = (skill) => [skill.id, skill.nameZh, skill.name, ...list(skill.aliases)].filter(Boolean);
 
+function explicitlyNames(active,name) {
+  const escaped=String(name).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const named=new RegExp(`(?:^|[\\s，,：:])\\$${escaped}(?=$|[\\s，,。.!！?？])`,'i');
+  const suffix=/[\p{Script=Han}]$/u.test(name)?'':'(?![a-z0-9_-]|[.:](?=[a-z0-9]))';
+  const direct=new RegExp(`(?:使用|调用|启用|采用|用|apply|use|invoke)\\s*(?:\\$)?${escaped}${suffix}`,'i');
+  return named.test(active)||direct.test(active);
+}
+
 function prohibitedSkill(skill, clauses) {
   if (!list(clauses).length) return false;
   const names = explicitName(skill);
@@ -235,7 +304,7 @@ function prohibitedSkill(skill, clauses) {
   return names.some(name => {
     if (!clauses.some(clause => norm(clause).includes(norm(name)))) return false;
     const escaped = String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const suffix = /[\p{Script=Han}]$/u.test(name) ? '' : '(?=$|[^a-z0-9_-])';
+    const suffix = /[\p{Script=Han}]$/u.test(name) ? '' : '(?![a-z0-9_-]|[.:](?=[a-z0-9]))';
     const rule = new RegExp(`${prefix}\\s*${action}\\s*${prior}\\$?${escaped}${suffix}`, 'iu');
     return list(clauses).some(clause => rule.test(clause));
   });
@@ -418,13 +487,23 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
   // A plugin mention identifies its currently supplied runtime skills, not an
   // unrelated legacy skill which happens to share the package's name.
   if (skill.sourceId?.startsWith('plugin:')) names.push(skill.sourceId.slice(7));
-  const explicit = names.some((name) => {
-    const escaped = String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const named = new RegExp(`(?:^|[\\s，,：:])\\$${escaped}(?=$|[\\s，,。.!！?？])`, 'i');
-    const suffix = /[\p{Script=Han}]$/u.test(name) ? '' : '(?=$|[^a-z0-9_-])';
-    const direct = new RegExp(`(?:使用|调用|启用|采用|用|apply|use|invoke)\\s*(?:\\$)?${escaped}${suffix}`, 'i');
-    return named.test(active) || direct.test(active);
-  });
+  const explicit = names.some(name=>explicitlyNames(active,name));
+  // QClaw's own host rules are not ambient instructions in another host.
+  // They remain available for an explicitly requested QClaw task.
+  if(host!=='qclaw'&&!explicit&&/^qclaw-rules(?:$|[-_])/i.test(String(skill.id||''))&&!/\bqclaw\b/i.test(active)) return {
+    skill,score:0,explicit:false,capability:inferCapability(skill),phase:inferSkillStage(skill),
+    reasons:['host-specific rules do not apply to this task'],availability:skillAvailability(skill,host,runtimeCapabilities),evidence:[],
+  };
+  // An unavailable qualified runtime identity cannot become available via a
+  // different origin merely because both point at the same physical file.
+  // An independently named, enabled alternative remains eligible.
+  const unavailableNames=list(skill.runtimeIdentities)
+    .filter(entry=>entry&&entry.available!==true&&typeof entry.id==='string'&&explicitlyNames(active,entry.id))
+    .map(entry=>entry.id);
+  if(unavailableNames.length&&!names.some(name=>!unavailableNames.includes(name)&&explicitlyNames(active,name)))return {
+    skill,score:-100,explicit:false,capability:inferCapability(skill),phase:inferSkillStage(skill),
+    reasons:['explicit runtime skill identity is unavailable in the current host'],availability:skillAvailability(skill,host,runtimeCapabilities),evidence:[],
+  };
   if (assessment.selfContainedFunction && !explicit) return {
     skill, score: 0, explicit: false, capability: inferCapability(skill), phase: inferSkillStage(skill),
     reasons: ['self-contained function; native baseline is sufficient'], availability: skillAvailability(skill, host, runtimeCapabilities), evidence: [],
@@ -517,6 +596,22 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
     if (!gitDeliveryIntent(active)) score = 0;
     else if (score > 0 && score < 20) score = 20;
   }
+  // Generic verbs and output labels may help rank an already relevant skill,
+  // but their combined rarity is not evidence that the task and manual share
+  // a concrete object. Keep exact names, specific triggers and independently
+  // supported action/object pairs, including short requests.
+  const concrete=concreteTaskSupport(skill,capability,assessment);
+  const concretePair=concrete.skill||concrete.codeTest||concrete.docx||concrete.data||concrete.research;
+  const substantiveHit=scoreableHits.some(hit=>!weakEvidence(hit.term)
+    && (!/^[\p{Script=Han}]+$/u.test(hit.term)||retrieval.queryWords!==null));
+  const specificTrigger=triggerHits.some(term=>!weakEvidence(term)
+    && (!/^[\p{Script=Han}]+$/u.test(String(term))||alignedHanPhrase(active,term)));
+  const specificDomain=Boolean(domainMatch&&!weakEvidence(domain));
+  if(!explicit&&!serviceName&&!diagramObject&&!diagnosticNameMatch&&!agentInstructionSupported
+      &&!specificDomain&&!specificTrigger&&!substantiveHit&&!concretePair)score=0;
+  if(!explicit&&concretePair&&taskObjectCompatible&&score<20)score=20;
+  if(!explicit&&(concrete.testLanguageMismatch||concrete.testFrameworkMismatch))score=0;
+  if(!explicit&&restrictedGitDelivery(skill)&&!gitDeliveryIntent(active))score=0;
   if (score > 0) score += calibration?.adjustment || 0;
   const availability = skillAvailability(skill, host, runtimeCapabilities);
   if (!availability.discovered || !availability.readable || !availability.enabled || !availability.compatible) score = -100;

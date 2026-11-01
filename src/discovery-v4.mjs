@@ -472,10 +472,24 @@ export function discoverSkills(options = {}) {
     const hostState = legacySkill?.hostCompatibility?.[host];
     const compatible = hostState === 'unsupported' ? false : hostState ? true : inferredCompatibility(host, group);
     const toolsAvailable = chosen.source.kind === 'plugin' && host !== (chosen.source.host || 'codex') || chosen.source.kind === 'host-plugin' && compatible === false ? false : null;
+    // Keep host-supplied names attached to their own origin. A different,
+    // enabled origin of the same physical file must not activate a disabled
+    // or incompatible runtime identity. Config-only inventories are not
+    // evidence of a name in the current host session.
+    const runtimeIdentities = group.filter((entry) => entry.source.kind === 'plugin'
+      && entry.runtime?.inventoryVerified !== false
+      && typeof entry.runtime?.id === 'string' && entry.runtime.id.trim()).map((entry) => ({
+      id: entry.runtime.id, sourceId: entry.source.id, host: entry.source.host,
+      currentHost: entry.source.host === host,
+      available: entry.enabled && entry.source.host === host && enabled && compatible && hostState !== 'degraded',
+    }));
+    const runtimeAliases = unique(runtimeIdentities.filter((entry) => entry.currentHost).map((entry) => entry.id))
+      .filter((name) => runtimeIdentities.filter((entry) => entry.currentHost && entry.id === name).every((entry) => entry.available));
+    const nonRuntimeAliases = unique([...(legacySkill?.aliases || []), meta.name, path.basename(chosen.path)]);
     const skill = {
       ...(legacySkill || {}), id, nameZh, summaryZh, path: chosen.path,
       ...(placeholderSummary && !usableDescription ? {summaryQuality:'placeholder'} : {}),
-      aliases: unique([...(legacySkill?.aliases || []), meta.name, path.basename(chosen.path)]),
+      aliases: unique([...nonRuntimeAliases, ...runtimeAliases]),
       triggers: legacySkill?.triggers?.length ? legacySkill.triggers : unique([meta.name, path.basename(chosen.path)]),
       category: legacySkill?.category || chosen.source.kind,
       status: legacySkill?.status || (enabled ? 'ready' : chosen.source.activationState === 'unknown' ? 'unverified' : 'disabled'),
@@ -483,6 +497,7 @@ export function discoverSkills(options = {}) {
       estimatedTokens: legacySkill?.estimatedTokens ?? Math.ceil(skillText.length / 4),
       sourceId: chosen.source.id, contentHash: hash(skillText), parentId: null,
       origins: group.map((entry) => origin(entry.source, entry.path, entry.enabled)),
+      ...(runtimeIdentities.length ? {runtimeIdentities, nonRuntimeAliases} : {}),
       availability: {discovered: true, readable: true, enabled, compatible, toolsAvailable},
     };
     skills.push(skill);
@@ -512,13 +527,32 @@ export function discoverSkills(options = {}) {
 
 export function resolveDiscoveredSkill(name, index) {
   const skills = index?.skills || [];
-  const exact = skills.find((skill) => skill.id === name);
-  if (exact) return {found: true, ambiguous: false, skill: exact};
+  const identities = (skill) => Array.isArray(skill.runtimeIdentities) ? skill.runtimeIdentities : [];
+  const candidateList = (matches) => matches.map(({id, nameZh, path, sourceId}) => ({id, nameZh, path, sourceId}));
+  const exact = skills.filter((skill) => skill.id === name || identities(skill).some((entry) => entry.id === name));
+  if (exact.length > 1) return {found: false, ambiguous: true, candidates: candidateList(exact)};
+  if (exact.length === 1) {
+    const skill = exact[0];
+    const bindings = identities(skill).filter((entry) => entry.id === name);
+    const currentBindings = bindings.filter((entry) => entry.currentHost);
+    if (bindings.length && (!currentBindings.length || !currentBindings.every((entry) => entry.available))) {
+      return {found: false, ambiguous: false, reason: 'runtime-skill-unavailable'};
+    }
+    return {found: true, ambiguous: false, skill};
+  }
   const key = normalize(name);
   if (!key) return {found: false, ambiguous: false};
-  const matches = skills.filter((skill) => [skill.nameZh, ...(skill.aliases || [])].some((alias) => normalize(alias) === key));
+  // Qualified host IDs must match literally; punctuation-stripping fallback is
+  // retained for existing non-runtime names and aliases only.
+  const matches = skills.filter((skill) => {
+    const aliases = Array.isArray(skill.nonRuntimeAliases) ? skill.nonRuntimeAliases : (skill.aliases || []);
+    if (![skill.nameZh, ...aliases].some((alias) => normalize(alias) === key)) return false;
+    const bindings = identities(skill).filter((entry) => normalize(entry.id) === key);
+    const currentBindings = bindings.filter((entry) => entry.currentHost);
+    return !bindings.length || currentBindings.length > 0 && currentBindings.every((entry) => entry.available);
+  });
   if (matches.length === 1) return {found: true, ambiguous: false, skill: matches[0]};
-  if (matches.length > 1) return {found: false, ambiguous: true, candidates: matches.map(({id, nameZh, path, sourceId}) => ({id, nameZh, path, sourceId}))};
+  if (matches.length > 1) return {found: false, ambiguous: true, candidates: candidateList(matches)};
   return {found: false, ambiguous: false};
 }
 
