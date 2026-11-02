@@ -8,6 +8,12 @@
 
 > 图按本项目实际模块生成，是架构示意，不是运行界面截图。
 
+## 安装到自己的 Codex
+
+将[这段简短安装提示词](docs/install-prompt.md)交给你电脑上的 Codex，即可让它按照[完整安装与验收指南](docs/codex-install.md)处理代码、依赖、MCP、Skill 和全局工作规则。路由服务统一叫 `dynamic_skill_router`，使用与你安装版本相同的完整路由核心；Skill、MCP、插件来自你自己的电脑。安装不继承作者账号、工具库或私有历史，也不需要路由器专用 API Key。
+
+指南附有[本机来源配置](examples/skill-sources.codex.json)与[通用全局规则模板](examples/codex-global-rules.md)，包含“深入而不是更大”和按证据改进原则。以新会话的实际 MCP 调用和本机能力发现验收；下方“快速上手”是隔离演示，不能代替完整安装。
+
 ## 功能
 
 - 发现配置来源中的 Skill，记录来源、重复项、失效链接、版本哈希及覆盖情况。
@@ -147,7 +153,7 @@ npm run demo
 
 ### 安装 Skill
 
-将本仓库的 `skill/dynamic-skill-router/` 目录复制到所用宿主支持的 Skill 目录，再按宿主方式刷新或启动新会话。以 Codex 为例，目标通常是当前用户目录下的 `.codex/skills/dynamic-skill-router/`。先检查目标是否已有同名内容；本仓库不自动覆盖用户配置或已有 Skill。
+将本仓库的 `skill/dynamic-skill-router/` 目录复制到所用宿主支持的 Skill 目录，再按宿主方式刷新或启动新会话。当前 Codex 官方用户目录约定为 `.agents/skills/dynamic-skill-router/`；旧环境的 `.codex/skills` 以目标宿主真实发现结果为准。先检查目标是否已有同名内容；完整配置和验收见 [Codex 安装指南](docs/codex-install.md)，本仓库不自动覆盖用户配置或已有 Skill。
 
 Skill 入口提供路由使用规则，实际 CLI/MCP 服务仍从本仓库运行，保留克隆目录与已安装依赖；按下面的说明配置 MCP。不同宿主的 Skill 路径和重载方式以该宿主文档为准。
 

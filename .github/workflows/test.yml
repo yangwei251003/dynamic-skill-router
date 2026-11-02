@@ -33,3 +33,4 @@ jobs:
       - run: npm run test:v4319
       - run: npm run test:v4320
       - run: npm run test:v4321
+      - run: npm run test:transfer

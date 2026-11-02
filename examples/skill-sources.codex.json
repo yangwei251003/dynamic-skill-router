@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 4,
+  "sources": [
+    {"id":"legacy","kind":"legacy","root":"${SKILLS_ROOT}","recursive":true},
+    {"id":"codex","kind":"host","host":"codex","root":"${HOME}/.codex/skills","recursive":true},
+    {"id":"agents","kind":"host","host":"codex","root":"${HOME}/.agents/skills","recursive":true},
+    {"id":"router-self","kind":"library","root":"${ROUTER_ROOT}/skill","recursive":true},
+    {"id":"project-codex","kind":"project","root":"${PROJECT_ROOT}/.codex/skills","recursive":true},
+    {"id":"project-agents","kind":"project","root":"${PROJECT_ROOT}/.agents/skills","recursive":true}
+  ]
+}
