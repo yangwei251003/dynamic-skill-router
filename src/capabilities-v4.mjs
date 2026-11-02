@@ -532,7 +532,8 @@ function adviseCapabilitiesBase(assessment, options = {}) {
   const cards = [];
   for (const entry of inventory.capabilities) {
     if (!entry.enabled) continue;
-    if (entry.kind==='tool' && exactToolProhibited(assessment.rawText??assessment.activeText,entry.name)) continue;
+    if (entry.kind==='tool' && exactToolProhibited(assessment.rawText??assessment.activeText,entry.name,
+      {searchOnlyRestricted:searchRestrictions?.prohibitedToolSearch?.includes(entry.name)===true})) continue;
     if (entry.kind==='tool' && prohibitedObjectOperation(assessment.rawText??assessment.activeText,entry)) continue;
     if (entry.kind==='tool' && searchToolBanned && webSearchToolPurpose(entry.description,entry.name)) continue;
     const runtimeRecord=entry.kind==='tool'?(options.runtimeTools||[]).find(t=>t.name===entry.name):null;

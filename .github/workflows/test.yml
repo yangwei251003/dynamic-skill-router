@@ -30,3 +30,4 @@ jobs:
       - run: npm run test:v4316
       - run: npm run test:v4317
       - run: npm run test:v4318
+      - run: npm run test:v4319

@@ -118,20 +118,31 @@ function maskDirectiveUrls(value='') {
 
 // Current, exact tool prohibitions apply only to the named handle. Do not
 // infer a provider-wide ban from a shared leaf name or from quoted material.
-export function exactToolProhibited(query='',toolName='') {
+export function exactToolProhibited(query='',toolName='',options={}) {
   if (typeof toolName!=='string'||!toolName.trim()) return false;
+  const searchOnlyRestricted=options?.searchOnlyRestricted===true;
   if (!String(query).toLowerCase().includes(toolName.toLowerCase())) return false;
   const masked=maskDirectiveUrls(instructionText(query));
   const escaped=toolName.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
   const prior='(?:[$\\p{L}\\p{N}_.:-]+\\s*(?:和|与|及|、|\\band\\b|\\bor\\b)\\s*)*';
   const exactName=`(?:'${escaped}'|${escaped})`;
   const rule=new RegExp(`(?:不要|不得|禁止|严禁|请勿|禁用|不使用|不用|不调用|不执行|(?<![分识辨区判鉴])别用|do not|don't|never)\\s*(?:(?:再|主动|自行|直接|实际|擅自)\\s*)*(?:使用|调用|执行|启用|参考|咨询|用|use|invoke|call|run)?\\s*(?:(?:工具|tool)\\s*)?${prior}\\$?${exactName}(?![\\p{L}\\p{N}_.:-])`,'giu');
-  for(const clause of instructionClauses(masked)) {
+  // Only the complete, standalone prohibition of this exact search method
+  // may be distinguished from a whole-tool ban, and only after the host has
+  // separately supplied a restriction for this exact tool's search action.
+  // A conjunction, extra action, ambiguous wording or additional ban keeps the
+  // old conservative whole-tool treatment.
+  const searchOnlyClause=new RegExp(`^(?:(?:请|麻烦|请你|please)\\s*)*(?:不要|不得|禁止|严禁|请勿|禁用|不使用|不用|不调用|不执行|(?<![分识辨区判鉴])别用|do not|don't|never)\\s*(?:(?:再|主动|自行|直接|实际|擅自)\\s*)*(?:使用|调用|执行|启用|用|use|invoke|call|run)?\\s*(?:(?:工具|tool)\\s*)?\\$?${exactName}\\s*(?:的|\\.|::)\\s*(?:search_query|search|(?:网页|网络)?(?:搜索|检索))(?:\\s*(?:方法|操作|接口|功能|method|action))?\\s*$`,'iu');
+  const clauses=instructionClauses(masked);
+  const openRequest=new RegExp(`^(?:(?:请|麻烦|请你|可以|允许|please|you may)\\s*)*(?:使用|调用|用|通过|use|invoke|call)\\s*\\$?${exactName}\\s*(?:的|来|to)?\\s*(?:open\\b|打开|访问|读取|阅读|查看|浏览)`,'iu');
+  const explicitOpen=searchOnlyRestricted&&clauses.some(c=>openRequest.test(c)&&!exactToolProhibited(c,toolName));
+  for(const clause of clauses) {
     rule.lastIndex=0;let match;
     while((match=rule.exec(clause))) {
       const before=clause.slice(0,match.index).trimEnd();
       if(/(?:以后|将来|未来|下次|日后|later|in future)(?:再|请)?\s*$/iu.test(before))continue;
       if(/(?:不必|无需|不需要|不要求|并非|不是|不)\s*$/u.test(before))continue;
+      if(explicitOpen&&searchOnlyClause.test(clause))continue;
       return true;
     }
   }
