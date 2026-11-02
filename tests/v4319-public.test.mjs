@@ -5,6 +5,7 @@ import {Client} from '@modelcontextprotocol/client';
 import {StdioClientTransport} from '@modelcontextprotocol/client/stdio';
 import {routeTaskV4,searchSkills} from '../src/advisor-v4.mjs';
 import {ROUTER_ROOT} from '../src/paths.mjs';
+import {ROUTER_VERSION} from '../src/version.mjs';
 
 // All tools and addresses below are fictional. The test runner supplies an
 // isolated data root and home directory; no business tool is called.
@@ -69,7 +70,7 @@ test('isolated MCP preserves method and network boundaries across phases',async(
   try{
     await client.connect(new StdioClientTransport({command:process.execPath,args:[path.join(ROUTER_ROOT,'src/mcp-server.mjs')],stderr:'pipe'}));
     const call=async(name,args)=>{const result=await client.callTool({name,arguments:args});assert(!result.isError,JSON.stringify(result));return result.structuredContent;};
-    const health=await call('health_check',{contractVersion:4});assert.equal(health.routerVersion,'4.3.19');
+    const health=await call('health_check',{contractVersion:4});assert.equal(health.routerVersion,ROUTER_VERSION);
     const common={host:'generic',runtimeTools,invocationContext:scope,recoveryContext:{confidence:'low',capabilityNeed:'public documentation'}};
     const first=await call('route_task',{...common,query,contractVersion:4,dryRun:true,useFeedback:false,includeAgentContext:false,capabilityLimit:10});
     const skillPhase=await call('search_skills',{...common,query,routeId:first.routeId,phase:'discovery',capabilityLimit:10});

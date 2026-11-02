@@ -8,6 +8,8 @@ import {inferCapability, inferSkillStage} from './skill-staging.mjs';
 import {adviseCapabilities} from './capabilities-v4.mjs';
 import {planRecovery, useFastPath} from './recovery-v4.mjs';
 import {instructionText,instructionClauses,negativeDirective,inferUserConstraints,isRequestedExampleOutput} from './request-evidence.mjs';
+import {specialtyMismatch,positiveObjectEvidence} from './specialty-alignment-v4.mjs';
+import {taskPurposeMatches,prohibitedDeclaredProduct} from './task-purpose-v4.mjs';
 
 const norm = (value) => String(value || '').normalize('NFKC').toLowerCase();
 const list = (value) => Array.isArray(value) ? value : [];
@@ -555,6 +557,11 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
     skill, score: -100, explicit: false, capability: inferCapability(skill), phase: inferSkillStage(skill),
     reasons: ['explicitly prohibited by the current request'], availability: skillAvailability(skill, host, runtimeCapabilities), evidence: [],
   };
+  const blockedProduct=prohibitedDeclaredProduct(skill,retrieval.negativeSkillClauses);
+  if(blockedProduct)return {
+    skill, score:-100, explicit:false, capability:inferCapability(skill), phase:inferSkillStage(skill),
+    reasons:['product explicitly prohibited in the current request'],availability:skillAvailability(skill,host,runtimeCapabilities),evidence:[],
+  };
   // A plugin mention identifies its currently supplied runtime skills, not an
   // unrelated legacy skill which happens to share the package's name.
   if (skill.sourceId?.startsWith('plugin:')) names.push(skill.sourceId.slice(7));
@@ -678,10 +685,22 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
   const specificTrigger=triggerHits.some(term=>!weakEvidence(term)
     && (!/^[\p{Script=Han}]+$/u.test(String(term))||alignedHanPhrase(active,term)));
   const specificDomain=Boolean(domainMatch&&!weakEvidence(domain));
+  // Compare specialized primary purposes with positive task objects; text
+  // from a standalone negative clause cannot become an identity anchor.
+  // Exact skill requests and independently requested services remain eligible.
+  const objectText=positiveObjectEvidence(assessment.activeClauses,active);
+  const sharedIdentityTerms=new Set(['codex','openai','plugin','plugins','skill','skills','agent','agents','assistant','host','runtime','system','网站','网页','主页','website','site','homepage']);
+  const specialtyIdentityAnchor=scoreableHits.some(hit=>document.identity.has(hit.term)
+    &&!weakEvidence(hit.term)&&!sharedIdentityTerms.has(norm(hit.term))&&lexicalScore(objectText,hit.term));
+  const positiveService=serviceName&&lexicalScore(objectText,serviceName);
+  const objectMismatch=!explicit&&!positiveService&&!specialtyIdentityAnchor
+    ?specialtyMismatch(skill,objectText,retrieval.rawQuery):null;
+  const purposeMatches=taskPurposeMatches(skill,assessment);
+  if(objectMismatch)score=0;
   if(!explicit&&!serviceName&&!diagramObject&&!diagnosticNameMatch&&!agentInstructionSupported
       &&!identityAnchor&&!specificHanTrigger&&!specificMultiwordTrigger
       &&!specificDomain&&!specificTrigger&&!substantiveHit&&!concretePair)score=0;
-  if(!explicit&&concretePair&&taskObjectCompatible&&score<20)score=20;
+  if(!explicit&&!objectMismatch&&concretePair&&taskObjectCompatible&&score<20)score=20;
   const recognitionTask=/(?:语音识别|语音转(?:写|文字)|\bspeech\s+recognition\b|\bautomatic\s+speech\s+recognition\b|\bspeech.to.text\b)/i.test(active);
   const voiceOutputTask=/(?:配音|旁白|语音合成|朗读|\b(?:voiceover|narration|text.to.speech|spoken audio)\b)/i.test(active);
   const speechSynthesisOnly=/^(?:generate|create|produce)\s+spoken\s+audio\s+from\s+text\b/i.test(String(skill.summaryZh||skill.description||'').trim())
@@ -690,6 +709,8 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
   if(!explicit&&(concrete.testLanguageMismatch||concrete.testFrameworkMismatch))score=0;
   if(!explicit&&financeSpecialistWithoutObject(skill,active))score=0;
   if(!explicit&&restrictedGitDelivery(skill)&&!gitDeliveryIntent(active))score=0;
+  if(!objectMismatch&&purposeMatches.length&&!(concrete.testLanguageMismatch||concrete.testFrameworkMismatch)
+      &&!financeSpecialistWithoutObject(skill,active)&&!(restrictedGitDelivery(skill)&&!gitDeliveryIntent(active)))score=Math.max(score,20);
   if (score > 0) score += calibration?.adjustment || 0;
   const availability = skillAvailability(skill, host, runtimeCapabilities);
   if (!availability.discovered || !availability.readable || !availability.enabled || !availability.compatible) score = -100;
@@ -703,6 +724,7 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
   if (concrete.accessibility) reasons.push('requested accessible interface aligns with accessibility manual');
   if (concrete.canvasDoc) reasons.push('requested JSON Canvas document aligns with its manual');
   if (concrete.videoTranscription) reasons.push('video transcription aligns with a manual that supports video input and transcription');
+  if (purposeMatches.length&&!objectMismatch) reasons.push(`task action and manual purpose align: ${purposeMatches[0].group}`);
   if (serviceName) reasons.push(`literal service name in task and skill: ${serviceName}`);
   if (formatCorroborated) reasons.push('requested file extension is corroborated by an independent skill identity match');
   const explainedHits = scoreableHits;
@@ -733,7 +755,12 @@ function scoreCandidate(skill, assessment, host, runtimeCapabilities, calibratio
     if(match&&!evidence.some(item=>norm(item.phrase)===norm(match[0])))
       evidence.unshift({kind:'task-purpose',phrase:match[0],querySignal:null,clauseIndex:i,snippet:snippet.slice(0,160)});
   }
-  return {skill, score, explicit, capability, phase, reasons, availability, evidence, serviceName};
+  for(const purpose of purposeMatches)if(!objectMismatch){
+    const i=list(assessment.activeClauses).findIndex(clause=>String(clause).includes(purpose.phrase));
+    if(i>=0&&!evidence.some(item=>norm(item.phrase)===norm(purpose.phrase)))
+      evidence.unshift({kind:'task-purpose',phrase:purpose.phrase,querySignal:null,clauseIndex:i,snippet:assessment.activeClauses[i].slice(0,160)});
+  }
+  return {skill, score, explicit, capability, phase, reasons, availability, evidence, serviceName,purposeMatches:objectMismatch?[]:purposeMatches};
 }
 
 function candidateCard(item, assessment) {
@@ -850,22 +877,44 @@ function advise(query, options = {}, filters = {}) {
   const negativeSkillClauses = scopedClauses.negative.filter(clause => !scopedClauses.future.includes(clause));
   const signalText = maskUrlText(assessment.activeText);
   const retrieval = retrievalIndex(skills, signalText, options.retrievalProfile === 'experimental', negativeSkillClauses);
+  retrieval.rawQuery=query;
   let ranked = skills.map((skill, index) => scoreCandidate(skill, assessment, host, options.runtimeCapabilities, feedback.get(skill.id)?.byMode?.consult, retrieval, retrieval.documents[index]))
     .filter((item) => item.score > 0);
   const explicitProviders = new Set(ranked.filter(item => item.explicit && item.skill.sourceId?.startsWith('plugin:')).map(item => item.skill.sourceId.slice(7)));
   ranked = ranked.filter(item => item.skill.sourceId?.startsWith('plugin:') || !explicitName(item.skill).some(name => explicitProviders.has(name)));
   if (filters.source) ranked = ranked.filter((item) => item.skill.sourceId === filters.source || list(item.skill.origins).some((origin) => origin.sourceId === filters.source));
   if (filters.domain) ranked = ranked.filter((item) => lexicalScore([item.capability, item.skill.category, item.skill.summaryZh, ...list(item.skill.domains)].join(' '), filters.domain));
-  if (filters.phase) ranked = ranked.filter((item) => item.phase === filters.phase);
+  if (filters.phase) ranked = ranked.filter((item) => item.phase === filters.phase || item.purposeMatches?.some(match=>match.phases.includes(filters.phase)));
   ranked.sort((a, b) => b.score - a.score || a.skill.id.localeCompare(b.skill.id));
   if (assessment.complexity === 'simple' && ranked.length) {
     const floor = Math.max(8, ranked[0].score * 0.82);
-    ranked = ranked.filter((item) => item.score >= floor || item.explicit || item.serviceName || item.reasons.some((reason) => reason.startsWith('matched task signal:')));
+    ranked = ranked.filter((item) => item.score >= floor || item.explicit || item.serviceName || item.purposeMatches?.length || item.reasons.some((reason) => reason.startsWith('matched task signal:')));
   }
   const budget = budgetFor(assessment, ranked, options.qualityProfile);
   const limit = Number.isInteger(filters.limit) && filters.limit > 0 ? Math.min(filters.limit, 12) : budget.consultCardLimit;
   const explicitCandidates = ranked.filter(item => item.explicit);
-  const selectedCards = [...explicitCandidates, ...ranked.filter(item => !item.explicit).slice(0, Math.max(0, limit - explicitCandidates.length))];
+  // Cover distinct observed action/output needs before adding repeated
+  // candidates for the same need. All remain optional host consultations.
+  const selectedCards=[...explicitCandidates],purposeCounts=new Map();
+  const recordPurposes=item=>{for(const match of item.purposeMatches||[])purposeCounts.set(match.group,(purposeCounts.get(match.group)||0)+1);};
+  for(const item of explicitCandidates)recordPurposes(item);
+  const purposePriority=item=>Math.min(...(item.purposeMatches||[]).map(match=>match.group==='personal-site-work'?0:match.group.startsWith('declared:')?1:2),3);
+  const purposeRanked=[...ranked].sort((a,b)=>purposePriority(a)-purposePriority(b)||b.score-a.score||a.skill.id.localeCompare(b.skill.id));
+  const needs=new Set(ranked.flatMap(item=>(item.purposeMatches||[]).map(match=>match.group).filter(group=>!group.startsWith('declared:'))));
+  const limitRepeatedNeeds=needs.size>1||explicitCandidates.length>1;
+  for(const item of purposeRanked){
+    if(selectedCards.length>=limit||item.explicit||item.score<20||item.availability.toolsAvailable===false)continue;
+    const unseen=(item.purposeMatches||[]).filter(match=>!purposeCounts.has(match.group));
+    if(!unseen.length)continue;
+    selectedCards.push(item);recordPurposes(item);
+  }
+  for(const item of ranked){
+    if(selectedCards.length>=limit)break;
+    if(selectedCards.includes(item))continue;
+    const groups=(item.purposeMatches||[]).map(match=>match.group).filter(group=>!group.startsWith('declared:'));
+    if(limitRepeatedNeeds&&!item.explicit&&!item.serviceName&&groups.length&&groups.every(group=>(purposeCounts.get(group)||0)>=3))continue;
+    selectedCards.push(item);recordPurposes(item);
+  }
   const consultCandidates = selectedCards.map((item) => {
     const card = candidateCard(item, assessment);
     const byMode = feedback.get(item.skill.id)?.byMode;
